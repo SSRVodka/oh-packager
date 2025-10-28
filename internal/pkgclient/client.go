@@ -252,6 +252,11 @@ func (c *Client) install(pkgNameOrLocalFile string, toSdk bool, prefix string) e
 		if !common.IsDirExists(dstHeaderDir) {
 			return fmt.Errorf("invalid OHOS sdk directory tree: header dir '%s' not exists", dstHeaderDir)
 		}
+		srcShareDir := filepath.Join(finalDir, "share")
+		dstShareDir := filepath.Join(prefix, "share")
+		if !common.IsDirExists(dstShareDir) {
+			return fmt.Errorf("invalid OHOS sdk directory tree: share dir '%s' not exists", dstShareDir)
+		}
 		// check arch-dep libs in arch-indep directory
 		var libFiles []string
 		var err error
@@ -263,7 +268,7 @@ func (c *Client) install(pkgNameOrLocalFile string, toSdk bool, prefix string) e
 			if common.IsArchDependentLib(l) {
 				fmt.Printf(
 					"WARNING: architecture-dependent library '%s' in arch-independent directory; This library may not be configured correctly.\n"+
-						"If this is not what you want, please clean build cache & make sure you've setup flags correctly like --libdir at compile time", l)
+						"If this is not what you want, please clean build cache & make sure you've setup flags correctly like --libdir at compile time\n", l)
 			}
 		}
 
@@ -278,10 +283,18 @@ func (c *Client) install(pkgNameOrLocalFile string, toSdk bool, prefix string) e
 		if common.IsDirExists(srcHeaderDir) {
 			fmt.Printf("Copying headers (in '%s') to sdk...\n", pkgName)
 			if err := common.CopyDirContents(srcHeaderDir, dstHeaderDir); err != nil {
-				return nil
+				return err
 			}
 		} else {
 			fmt.Printf("NOTE: package does NOT have any headers\n")
+		}
+		if common.IsDirExists(srcShareDir) {
+			fmt.Printf("Copying shared resources (in '%s') to sdk\n", pkgName)
+			if err := common.CopyDirContents(srcShareDir, dstShareDir); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("NOTE: package does NOT have any shared resources\n")
 		}
 
 		// remove the redundant dirs (ignore errors)
