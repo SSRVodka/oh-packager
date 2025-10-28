@@ -1,0 +1,229 @@
+package common
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/SSRVodka/oh-packager/pkg/config"
+	"github.com/mholt/archiver/v3"
+)
+
+const DEFAULT_CONFIG_DIR string = "oh_pkgmgr"
+
+// config path helpers
+func UserConfigDir() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, DEFAULT_CONFIG_DIR)
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", DEFAULT_CONFIG_DIR)
+}
+
+// DefaultConfig returns defaults.
+func DefaultConfig() *config.Config {
+	return &config.Config{
+		RootURL: "",
+		Arch:    "",
+		OhosSdk: "",
+		Channel: "stable",
+	}
+}
+
+// DefaultArch returns combined OS-arch string used by server (like linux-x86_64).
+func DefaultArch() string {
+	goarch := runtime.GOARCH
+	cfg, err := LoadConfig(DefaultConfigPath())
+	if err != nil || cfg.Arch == "" {
+		// WARN
+		// fallback to os-arch
+		return goarch
+	}
+	return cfg.Arch
+}
+
+func DefaultConfigPath() string {
+	return filepath.Join(UserConfigDir(), "config.json")
+}
+
+func LoadConfig(path string) (*config.Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c config.Config
+	if err := jsonUnmarshal(b, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func SaveConfig(path string, c *config.Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := jsonMarshalIndent(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
+// small json helpers to avoid import cycles
+func jsonUnmarshal(b []byte, v interface{}) error {
+	return json.Unmarshal(b, v)
+}
+func jsonMarshalIndent(v interface{}) ([]byte, error) {
+	return json.MarshalIndent(v, "", "  ")
+}
+
+// fetch URL bytes
+func FetchURL(client *http.Client, url string) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func DownloadToFile(client *http.Client, url, dest string) error {
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+func VerifyFileSHA256(path, expected string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	return strings.EqualFold(sum, expected), nil
+}
+
+// ExtractTarGz extracts tar.gz into destDir.
+func ExtractTarGz(archive, destDir string) error {
+	// Generate path for temporary .tar.gz file
+	dir := filepath.Dir(archive)
+	baseName := filepath.Base(archive)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+	newTarGzName := nameWithoutExt + ".tar.gz"
+	newTarGzPath := filepath.Join(dir, newTarGzName)
+
+	// Copy original archive to temporary .tar.gz file using the extracted function
+	if err := copyFile(archive, newTarGzPath); err != nil {
+		return fmt.Errorf("failed to prepare .tar.gz file: %w", err)
+	}
+
+	// Clean up temporary file after extraction (success or failure)
+	defer func() {
+		if err := os.Remove(newTarGzPath); err != nil {
+			fmt.Printf("warning: could not remove temporary file %s: %v", newTarGzPath, err)
+		}
+	}()
+
+	// Extract the .tar.gz file
+	if err := archiver.Unarchive(newTarGzPath, destDir); err != nil {
+		return fmt.Errorf("extraction failed: %w", err)
+	}
+
+	return nil
+}
+
+// list files (with dir) in a directory
+func ListDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list directory failed: %w", err)
+	}
+
+	var filePaths []string
+	for _, entry := range entries {
+		fullPath := filepath.Join(dir, entry.Name())
+		filePaths = append(filePaths, fullPath)
+	}
+
+	return filePaths, nil
+}
+
+// copy all the contents (including links) in `srcDir` to `dstDir` (overwrite)
+// e.g., {a/1.txt,a/b/c/2.txt} -> CopyDirContents(a, d) -> {d/1.txt,d/b/c/2.txt}
+
+func CopyDirContents(srcDir, dstDir string) error {
+
+	// Resolve absolute paths to detect overlaps
+	absSrc, err := filepath.Abs(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve source path: %w", err)
+	}
+	absDst, err := filepath.Abs(dstDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve destination path: %w", err)
+	}
+
+	// Prevent copying to itself or subdirectory
+	if absSrc == absDst || strings.HasPrefix(absDst, absSrc+string(filepath.Separator)) {
+		return fmt.Errorf("destination cannot be same as or inside source")
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to read source directory: %w", err)
+	}
+
+	// Create destination directory if it doesn't exist
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+
+		if entry.IsDir() {
+			// Recursively copy subdirectories
+			if err := CopyDirContents(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return fmt.Errorf("failed to copy file %s: %w", srcPath, err)
+			}
+		}
+	}
+
+	return nil
+}
