@@ -88,9 +88,9 @@ func main() {
 	// INSTALL
 	var prefix string
 	installCmd := &cobra.Command{
-		Use:   "install <package>",
-		Short: "Install a package",
-		Args:  cobra.ExactArgs(1),
+		Use:   "add <package> [package...]",
+		Short: "Install one or more packages to prefix. Empty prefix indicates installing to OHOS sdk (irreversible)",
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfgFile := common.DefaultConfigPath()
 			cfg, err := common.LoadConfig(cfgFile)
@@ -98,41 +98,23 @@ func main() {
 				return err
 			}
 			cl := pkgclient.NewClient(cfg)
-			pkg := args[0]
 			if prefix == "" {
-				return fmt.Errorf("--prefix required")
+				return cl.InstallToSdk(args)
 			}
 			var prefixErr error
 			prefix, prefixErr = common.GetAbsolutePath(prefix)
 			if prefixErr != nil {
 				return prefixErr
 			}
-			return cl.Install(pkg, prefix)
+			return cl.Install(args, prefix)
 		},
 	}
-	installCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required)")
-
-	// INSTALL to SDK
-	installToSdkCmd := &cobra.Command{
-		Use:   "add2sdk <package>",
-		Short: "Install a package to OHOS sdk (irreversible)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfgFile := common.DefaultConfigPath()
-			cfg, err := common.LoadConfig(cfgFile)
-			if err != nil {
-				return err
-			}
-			cl := pkgclient.NewClient(cfg)
-			pkg := args[0]
-			return cl.InstallToSdk(pkg)
-		},
-	}
+	installCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required for non OHOS sdk installation)")
 
 	// UNINSTALL
 	uninstallCmd := &cobra.Command{
-		Use:   "uninstall <package>",
-		Short: "Uninstall a package from prefix (remove symlink and version dir)",
+		Use:   "del <package>",
+		Short: "Uninstall a package from prefix (WARN: may break dependencies)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfgFile := common.DefaultConfigPath()
@@ -155,7 +137,7 @@ func main() {
 	}
 	uninstallCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required)")
 
-	root.AddCommand(cfgCmd, listCmd, installCmd, installToSdkCmd, uninstallCmd)
+	root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

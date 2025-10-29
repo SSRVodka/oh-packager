@@ -94,35 +94,9 @@ func (c *Client) ListPackages(arch string) error {
 			return vi.GT(vj)
 		})
 		latest := list[0]
-		fmt.Printf("%s\t%s\t%s\n", latest.Name, latest.Version, latest.URL)
+		fmt.Printf("%s\t%s\tAPI: %s\t%s\n", latest.Name, latest.Version, latest.OhosApi, latest.URL)
 	}
 	return nil
-}
-
-func (c *Client) choosePkgFromServer(pkgName, arch string) (meta.IndexEntry, error) {
-	if c.Config.RootURL == "" {
-		return meta.IndexEntry{}, errors.New("root URL not configured")
-	}
-	// load index
-	idx, err := c.loadIndex()
-	if err != nil {
-		return meta.IndexEntry{}, err
-	}
-	cands := []meta.IndexEntry{}
-	for _, e := range idx.Packages {
-		if e.Name == pkgName && e.Arch == arch {
-			cands = append(cands, e)
-		}
-	}
-	if len(cands) == 0 {
-		return meta.IndexEntry{}, fmt.Errorf("package %s/%s not found", pkgName, arch)
-	}
-	sort.Slice(cands, func(i, j int) bool {
-		vi, _ := semver.ParseTolerant(cands[i].Version)
-		vj, _ := semver.ParseTolerant(cands[j].Version)
-		return vi.GT(vj)
-	})
-	return cands[0], nil
 }
 
 /** @return (pkgFilePath, pkgVersion, error) */
@@ -131,7 +105,7 @@ func (c *Client) download(choice meta.IndexEntry) (string, string, error) {
 	pkgURL := common.JoinURL(c.Config.RootURL, choice.URL)
 	pkgPath := filepath.Join(c.Cache, filepath.Base(choice.URL))
 	if _, err := os.Stat(pkgPath); os.IsNotExist(err) {
-		fmt.Println("downloading", pkgURL)
+		fmt.Println(" - downloading", pkgURL)
 		if err := common.DownloadToFile(c.HTTP, pkgURL, pkgPath); err != nil {
 			return "", "", err
 		}
@@ -178,8 +152,13 @@ func (c *Client) extract(pkgPath, pkgName, pkgVersion, prefix string) (string, e
  * @param[in] prefix only valid when toSdk == false
  * @return (finalDir, error)
  */
-func (c *Client) install(pkgNameOrLocalFile string, toSdk bool, prefix string) error {
-	var pkgName, pkgPath, arch, ver string
+func (c *Client) install(pkgNameOrLocalFileList []string, toSdk bool, prefix string) error {
+
+	var localSdkInfo *meta.OhosSdkInfo
+	var loadSdkErr error
+	if localSdkInfo, loadSdkErr = common.LoadLocalSdkInfo(c.Config.OhosSdk); loadSdkErr != nil {
+		return loadSdkErr
+	}
 
 	if toSdk {
 		prefix = filepath.Join(c.Config.OhosSdk, "native", "sysroot", "usr")
@@ -188,141 +167,287 @@ func (c *Client) install(pkgNameOrLocalFile string, toSdk bool, prefix string) e
 		}
 	}
 
-	if common.IsPkgPath(pkgNameOrLocalFile) {
-		// install from local file
-		var parseErr error
-		pkgName, ver, arch, parseErr = common.ParsePkgNameFromPath(pkgNameOrLocalFile)
-		if parseErr != nil {
-			return parseErr
+	lastArch := ""
+	name2pkgPath := map[string]string{}
+
+	// name/constraint list
+	pkgs := []string{}
+
+	for _, pkgNameOrLocalFile := range pkgNameOrLocalFileList {
+		var pkgName, pkgPath, ver, arch string
+		var api = localSdkInfo.ApiVersion
+		if common.IsPkgPath(pkgNameOrLocalFile) {
+			// install from local file: lock constraint in filename
+			var parseErr error
+			pkgName, ver, arch, api, parseErr = common.ParsePkgNameFromPath(pkgNameOrLocalFile)
+			if parseErr != nil {
+				return parseErr
+			}
+			pkgPath = pkgNameOrLocalFile
+			// add pkgPath into result
+			name2pkgPath[pkgName] = pkgPath
+			// build constraint string
+			pkgName = pkgName + " == " + ver
+			// check SDK API
+			if api != localSdkInfo.ApiVersion {
+				return fmt.Errorf("API version mismatch with your local configured SDK: '%s' vs '%s'",
+					api, localSdkInfo.ApiVersion)
+			}
+		} else {
+			// install from server using pkgName
+			pkgName = pkgNameOrLocalFile
+			arch = common.DefaultArch()
 		}
-		pkgPath = pkgNameOrLocalFile
-	} else {
-		// install from server using pkgName
-		pkgName = pkgNameOrLocalFile
-		arch = common.DefaultArch()
-		choice, chooseErr := c.choosePkgFromServer(pkgName, arch)
-		if chooseErr != nil {
-			return chooseErr
+
+		// check arch consistency
+		if lastArch == "" {
+			lastArch = arch
+		} else if arch != lastArch {
+			return fmt.Errorf("different archs in one installation: '%s' vs '%s'", arch, lastArch)
 		}
-		var derr error
-		pkgPath, ver, derr = c.download(choice)
-		if derr != nil {
-			return derr
-		}
+
+		pkgs = append(pkgs, pkgName)
 	}
 
-	// open DB
+	// Resolve dependencies (returns chosen versions map)
+	fmt.Printf("Resolving dependencies...\n")
+	chosen, err := c.ResolveDependencies(pkgs)
+	if err != nil {
+		return err
+	}
+
+	// open DB once
 	db, err := OpenDB(c.DBPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	installed, err := db.GetInstalled(pkgName, prefix)
-	if err != nil {
-		return err
-	}
-	if installed != nil {
-		if installed.Version == ver {
-			fmt.Printf("%s already installed at same version %s\n", pkgName, ver)
-			return nil
-		}
-		// uninstall current
-		if err := c.uninstallDB(db, pkgName, prefix); err != nil {
+	for name, entry := range chosen {
+		fmt.Printf("Preparing %s %s\n", name, entry.Version)
+
+		// check installed
+		installed, err := db.GetInstalled(name, prefix)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("previous version %s removed\n", installed.Version)
-	}
-
-	finalDir, exErr := c.extract(pkgPath, pkgName, ver, prefix)
-	if exErr != nil {
-		return exErr
-	}
-
-	if toSdk {
-		srcLibDir := filepath.Join(finalDir, "lib")
-		dstLibDir := filepath.Join(prefix, "lib")
-		archDepSrcLibDir := filepath.Join(srcLibDir, arch+"-linux-ohos")
-		archDepDstLibDir := filepath.Join(dstLibDir, arch+"-linux-ohos")
-		if !common.IsDirExists(archDepDstLibDir) {
-			return fmt.Errorf("invalid OHOS sdk directory tree: lib dir '%s' not exists", dstLibDir)
+		if installed != nil && installed.Version == entry.Version {
+			fmt.Printf(" - %s already installed at same version %s, skipping\n", name, entry.Version)
+			continue
 		}
-		srcHeaderDir := filepath.Join(finalDir, "include")
-		dstHeaderDir := filepath.Join(prefix, "include")
-		if !common.IsDirExists(dstHeaderDir) {
-			return fmt.Errorf("invalid OHOS sdk directory tree: header dir '%s' not exists", dstHeaderDir)
-		}
-		srcShareDir := filepath.Join(finalDir, "share")
-		dstShareDir := filepath.Join(prefix, "share")
-		if !common.IsDirExists(dstShareDir) {
-			return fmt.Errorf("invalid OHOS sdk directory tree: share dir '%s' not exists", dstShareDir)
-		}
-		// check arch-dep libs in arch-indep directory
-		var libFiles []string
-		var err error
-		// Check if there are architecture dependent libraries in dstLibDir
-		if libFiles, err = common.ListDir(srcLibDir); err != nil {
-			return err
-		}
-		for _, l := range libFiles {
-			if common.IsArchDependentLib(l) {
-				fmt.Printf(
-					"WARNING: architecture-dependent library '%s' in arch-independent directory; This library may not be configured correctly.\n"+
-						"If this is not what you want, please clean build cache & make sure you've setup flags correctly like --libdir at compile time\n", l)
-			}
-		}
-
-		if common.IsDirExists(archDepSrcLibDir) {
-			fmt.Printf("Copying libraries (in '%s') to sdk...\n", pkgName)
-			if err := common.CopyDirContents(archDepSrcLibDir, archDepDstLibDir); err != nil {
+		if installed != nil && installed.Version != entry.Version {
+			// uninstall previous
+			if err := c.uninstallDB(db, name, prefix); err != nil {
 				return err
 			}
-		} else {
-			fmt.Printf("NOTE: package does NOT have any architecture-dependent libraries for OHOS\n")
-		}
-		if common.IsDirExists(srcHeaderDir) {
-			fmt.Printf("Copying headers (in '%s') to sdk...\n", pkgName)
-			if err := common.CopyDirContents(srcHeaderDir, dstHeaderDir); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("NOTE: package does NOT have any headers\n")
-		}
-		if common.IsDirExists(srcShareDir) {
-			fmt.Printf("Copying shared resources (in '%s') to sdk\n", pkgName)
-			if err := common.CopyDirContents(srcShareDir, dstShareDir); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("NOTE: package does NOT have any shared resources\n")
+			fmt.Printf(" - removed previous version %s\n", installed.Version)
 		}
 
-		// remove the redundant dirs (ignore errors)
-		os.RemoveAll(finalDir)
-		os.RemoveAll(filepath.Join(prefix, pkgName))
-
-	} else {
-		// ONLY record for non-sdk installation
-		// record in DB
-		if err := db.InsertInstalled(pkgName, ver, arch, prefix, finalDir); err != nil {
-			return err
+		var curPkgPath, curPkgVer string
+		if f, ok := name2pkgPath[name]; !ok {
+			var derr error
+			curPkgPath, curPkgVer, derr = c.download(entry)
+			if derr != nil {
+				return derr
+			}
+			name2pkgPath[name] = curPkgPath
+		} else {
+			curPkgPath = f
+			curPkgVer = entry.Version
+			fmt.Printf(" - using local file: %s\n", curPkgPath)
 		}
-		fmt.Printf("installed %s %s -> %s\n", pkgName, ver, finalDir)
+
+		fmt.Printf("Extracting %s %s\n", name, curPkgVer)
+		finalDir, exErr := c.extract(curPkgPath, name, curPkgVer, prefix)
+		if exErr != nil {
+			return exErr
+		}
+
+		if toSdk {
+			srcLibDir := filepath.Join(finalDir, "lib")
+			dstLibDir := filepath.Join(prefix, "lib")
+			archDepSrcLibDir := filepath.Join(srcLibDir, entry.Arch+"-linux-ohos")
+			archDepDstLibDir := filepath.Join(dstLibDir, entry.Arch+"-linux-ohos")
+			if !common.IsDirExists(archDepDstLibDir) {
+				return fmt.Errorf("invalid OHOS sdk directory tree: lib dir '%s' not exists", dstLibDir)
+			}
+			srcHeaderDir := filepath.Join(finalDir, "include")
+			dstHeaderDir := filepath.Join(prefix, "include")
+			if !common.IsDirExists(dstHeaderDir) {
+				return fmt.Errorf("invalid OHOS sdk directory tree: header dir '%s' not exists", dstHeaderDir)
+			}
+			srcShareDir := filepath.Join(finalDir, "share")
+			dstShareDir := filepath.Join(prefix, "share")
+			if !common.IsDirExists(dstShareDir) {
+				return fmt.Errorf("invalid OHOS sdk directory tree: share dir '%s' not exists", dstShareDir)
+			}
+			// check arch-dep libs in arch-indep directory
+			var libFiles []string
+			var err error
+			// Check if there are architecture dependent libraries in dstLibDir
+			if libFiles, err = common.ListDir(srcLibDir); err != nil {
+				return err
+			}
+			for _, l := range libFiles {
+				if common.IsArchDependentLib(l) {
+					fmt.Printf(
+						" - WARNING: architecture-dependent library '%s' in arch-independent directory; This library may not be configured correctly.\n"+
+							"If this is not what you want, please clean build cache & make sure you've setup flags correctly like --libdir at compile time\n", l)
+				}
+			}
+
+			if common.IsDirExists(archDepSrcLibDir) {
+				fmt.Printf(" - Copying libraries (in '%s') to sdk...\n", name)
+				if err := common.CopyDirContents(archDepSrcLibDir, archDepDstLibDir); err != nil {
+					return err
+				}
+			} else {
+				fmt.Printf(" - NOTE: package does NOT have any architecture-dependent libraries for OHOS\n")
+			}
+			if common.IsDirExists(srcHeaderDir) {
+				fmt.Printf(" - Copying headers (in '%s') to sdk...\n", name)
+				if err := common.CopyDirContents(srcHeaderDir, dstHeaderDir); err != nil {
+					return err
+				}
+			} else {
+				fmt.Printf(" - NOTE: package does NOT have any headers\n")
+			}
+			if common.IsDirExists(srcShareDir) {
+				fmt.Printf(" - Copying shared resources (in '%s') to sdk\n", name)
+				if err := common.CopyDirContents(srcShareDir, dstShareDir); err != nil {
+					return err
+				}
+			} else {
+				fmt.Printf(" - NOTE: package does NOT have any shared resources\n")
+			}
+
+			// remove the redundant dirs (ignore errors)
+			os.RemoveAll(finalDir)
+			os.RemoveAll(filepath.Join(prefix, name))
+		} else {
+			// ONLY record for non-sdk installation
+			// record in DB
+			if err := db.InsertInstalled(name, curPkgVer, entry.Arch, prefix, finalDir); err != nil {
+				return err
+			}
+			fmt.Printf("Installed %s %s -> %s\n", name, curPkgVer, finalDir)
+		}
 	}
 
 	return nil
 }
 
-// Install downloads and installs the named package into OHOS sdk
-func (c *Client) InstallToSdk(pkgNameOrLocalFile string) error {
+// ResolveDependencies takes initial requested package names (each string may be a simple name)
+// and returns a map[name]IndexEntry of chosen versions to install (values order not guaranteed).
+// It uses index.json and package manifests for transitive deps.
+func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexEntry, error) {
+	// load index
+	idx, err := c.loadIndex()
+	if err != nil {
+		return nil, err
+	}
+	// load local sdk info
+	sdkInfo, err := common.LoadLocalSdkInfo(c.Config.OhosSdk)
+	if err != nil {
+		return nil, err
+	}
 
-	return c.install(pkgNameOrLocalFile, true, "")
+	// build entries-by-name map from index
+	byName := map[string][]meta.IndexEntry{}
+	for _, e := range idx.Packages {
+		byName[e.Name] = append(byName[e.Name], e)
+	}
+	// sort each list by semver descending
+	for _, list := range byName {
+		sort.SliceStable(list, func(i, j int) bool {
+			vi, _ := semver.ParseTolerant(list[i].Version)
+			vj, _ := semver.ParseTolerant(list[j].Version)
+			return vi.GT(vj)
+		})
+	}
+
+	// constraints map: name -> []Constraint
+	constraints := map[string][]common.Constraint{}
+	queue := []string{}
+
+	// initial requested: they may be plain names. For now we treat requested as name-only.
+	for _, r := range requested {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if _, ok := constraints[r]; !ok {
+			constraints[r] = []common.Constraint{}
+			queue = append(queue, r)
+		}
+	}
+
+	// result map chosen[name] = IndexEntry
+	chosen := map[string]meta.IndexEntry{}
+
+	// BFS-like process: while queue has names, attempt to pick a version satisfying constraints,
+	// fetch its manifest, and enqueue its dependencies (merging constraints if present).
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+
+		// if already chosen, continue
+		if _, ok := chosen[name]; ok {
+			continue
+		}
+
+		// find candidates for this name
+		candList := byName[name]
+		if len(candList) == 0 {
+			return nil, fmt.Errorf("dependency %q not found in index", name)
+		}
+		// pick first (latest) candidate satisfying constraints[name]
+		cands := constraints[name]
+		var chosenEntry *meta.IndexEntry
+		for _, e := range candList {
+			if common.SatisfiesConstraints(e.Version, cands) && e.OhosApi == sdkInfo.ApiVersion {
+				tmp := e
+				chosenEntry = &tmp
+				break
+			}
+		}
+		if chosenEntry == nil {
+			// no candidate found
+			return nil, fmt.Errorf("no version of %s satisfies constraints %+v and OHOS API %s",
+				name, cands, sdkInfo.ApiVersion)
+		}
+
+		// select it
+		chosen[name] = *chosenEntry
+
+		// get its declared depends
+		curDeps := chosenEntry.Depends
+		// iterate declared dependencies and merge constraints
+		for _, dep := range curDeps {
+			depName, depC := common.ParseDep(dep)
+			// append constraint
+			cur := constraints[depName]
+			// if depName not seen before, queue it
+			if _, ok := constraints[depName]; !ok {
+				queue = append(queue, depName)
+			}
+			constraints[depName] = append(cur, depC)
+		}
+	}
+
+	return chosen, nil
+}
+
+// Install downloads and installs the named package into OHOS sdk
+func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string) error {
+
+	return c.install(pkgNameOrLocalFileList, true, "")
 }
 
 // Install downloads and installs the named package into prefix.
-func (c *Client) Install(pkgNameOrLocalFile, prefix string) error {
+func (c *Client) Install(pkgNameOrLocalFileList []string, prefix string) error {
 
-	return c.install(pkgNameOrLocalFile, false, prefix)
+	return c.install(pkgNameOrLocalFileList, false, prefix)
 }
 
 // Uninstall removes installed package from prefix.

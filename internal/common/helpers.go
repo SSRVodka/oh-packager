@@ -70,29 +70,30 @@ func IsPkgPath(path string) bool {
 	return true
 }
 
-// ASSUME: pkgVersion & pkgArch doesn't contains '-'
+// ASSUME: pkgVersion & pkgArch & pkgAPI doesn't contains '-'
 
-func GenPkgFileName(pkgName, pkgVersion, pkgArch string) string {
-	return fmt.Sprintf("%s-%s-%s.pkg", pkgName, pkgVersion, pkgArch)
+func GenPkgFileName(pkgName, pkgVersion, pkgArch, pkgAPI string) string {
+	return fmt.Sprintf("%s-%s-%s-api%s.pkg", pkgName, pkgVersion, pkgArch, pkgAPI)
 }
-func GenPkgManifestName(pkgName, pkgVersion, pkgArch string) string {
-	return fmt.Sprintf("%s-%s-%s.json", pkgName, pkgVersion, pkgArch)
+func GenPkgManifestName(pkgName, pkgVersion, pkgArch, pkgAPI string) string {
+	return fmt.Sprintf("%s-%s-%s-api%s.json", pkgName, pkgVersion, pkgArch, pkgAPI)
 }
 
-/** @return (pkgName, pkgVersion, pkgArch, error) */
-func ParsePkgNameFromPath(path string) (string, string, string, error) {
+/** @return (pkgName, pkgVersion, pkgArch, pkgAPI, error) */
+func ParsePkgNameFromPath(path string) (string, string, string, string, error) {
 	basename := filepath.Base(path)
 	ext := filepath.Ext(path)
 	baseWithoutExt := strings.TrimSuffix(basename, ext)
 	tokens := strings.Split(baseWithoutExt, "-")
 	tl := len(tokens)
-	if len(tokens) < 3 {
-		return "", "", "", fmt.Errorf("invalid package name: '%s'", basename)
+	if len(tokens) < 4 {
+		return "", "", "", "", fmt.Errorf("invalid package name: '%s'", basename)
 	}
-	pkgVersion := tokens[tl-2]
-	pkgArch := tokens[tl-1]
-	tokens = tokens[:tl-2]
-	return strings.Join(tokens, "-"), pkgVersion, pkgArch, nil
+	pkgAPI := strings.TrimPrefix(tokens[tl-1], "api")
+	pkgArch := tokens[tl-2]
+	pkgVersion := tokens[tl-3]
+	tokens = tokens[:tl-3]
+	return strings.Join(tokens, "-"), pkgVersion, pkgArch, pkgAPI, nil
 }
 
 func JoinURL(base, rel string) string {
@@ -241,8 +242,8 @@ func DeployPackage(basePath, channel, pkgFile, manifestFile string) error {
 	}
 
 	// destination names
-	pkgBase := fmt.Sprintf("%s-%s-%s.pkg", manifest.Name, manifest.Version, manifest.Arch)
-	manifestBase := fmt.Sprintf("%s-%s-%s.json", manifest.Name, manifest.Version, manifest.Arch)
+	pkgBase := GenPkgFileName(manifest.Name, manifest.Version, manifest.Arch, manifest.OhosApi)
+	manifestBase := GenPkgManifestName(manifest.Name, manifest.Version, manifest.Arch, manifest.OhosApi)
 
 	dstPkg := filepath.Join(pkgsDir, pkgBase)
 	dstManifest := filepath.Join(pkgsDir, manifestBase)
@@ -303,10 +304,12 @@ func regenerateIndex(basePath, channel string) error {
 			Name:     m.Name,
 			Version:  m.Version,
 			Arch:     m.Arch,
+			OhosApi:  m.OhosApi,
 			URL:      url,
 			SHA256:   m.SHA256,
 			Size:     m.Size,
 			Manifest: fmt.Sprintf("channels/%s/pkgs/%s", channel, filepath.Base(path)),
+			Depends:  m.Depends,
 		})
 		return nil
 	})

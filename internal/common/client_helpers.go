@@ -13,10 +13,92 @@ import (
 	"strings"
 
 	"github.com/SSRVodka/oh-packager/pkg/config"
+	"github.com/SSRVodka/oh-packager/pkg/meta"
+	"github.com/blang/semver/v4"
 	"github.com/mholt/archiver/v3"
 )
 
 const DEFAULT_CONFIG_DIR string = "oh_pkgmgr"
+
+// Constraint represents a single operator constraint on a version.
+type Constraint struct {
+	Op  string // one of ">=", "<=", ">", "<", "==", "" (empty = any)
+	Ver string // version string
+}
+
+// parseDep parses a dependency token like:
+//
+//	"libfoo >= 1.2.3"
+//	"libbar == 1.0.0"
+//	"openssl"
+//
+// returns name, Constraint (op=="" if none)
+func ParseDep(dep string) (string, Constraint) {
+	dep = strings.TrimSpace(dep)
+	// split by first space
+	parts := strings.Fields(dep)
+	if len(parts) == 1 {
+		return parts[0], Constraint{Op: "", Ver: ""}
+	}
+	// expected: name op version
+	name := parts[0]
+	if len(parts) >= 3 {
+		op := parts[1]
+		ver := parts[2]
+		// strip quotes if any
+		ver = strings.Trim(ver, `"'`)
+		return name, Constraint{Op: op, Ver: ver}
+	}
+	// fallback: treat as name only
+	return dep, Constraint{Op: "", Ver: ""}
+}
+
+// satisfies checks if version satisfies all constraints
+func SatisfiesConstraints(version string, constraints []Constraint) bool {
+	if len(constraints) == 0 {
+		return true
+	}
+	v, err := semver.ParseTolerant(version)
+	if err != nil {
+		// if we can't parse, be conservative and return false
+		return false
+	}
+	for _, c := range constraints {
+		if c.Op == "" {
+			continue
+		}
+		cv, err := semver.ParseTolerant(c.Ver)
+		if err != nil {
+			return false
+		}
+		switch c.Op {
+		case "==":
+			if !v.Equals(cv) {
+				return false
+			}
+		case ">=":
+			if v.LT(cv) {
+				return false
+			}
+		case "<=":
+			if v.GT(cv) {
+				return false
+			}
+		case ">":
+			if !v.GT(cv) {
+				return false
+			}
+		case "<":
+			if !v.LT(cv) {
+				return false
+			}
+		default:
+			// unknown op -> fail
+			return false
+		}
+	}
+	return true
+}
 
 // config path helpers
 func UserConfigDir() string {
@@ -63,6 +145,24 @@ func LoadConfig(path string) (*config.Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+func LoadLocalSdkInfo(ohosSdkPath string) (*meta.OhosSdkInfo, error) {
+	packInfoPath := filepath.Join(ohosSdkPath, "toolchains", "oh-uni-package.json")
+	if !IsFileExists(packInfoPath) {
+		return nil, fmt.Errorf("invalid OHOS sdk directory tree: '%s' not found", packInfoPath)
+	}
+	data, err := os.ReadFile(packInfoPath)
+	if err != nil {
+		return nil, fmt.Errorf("OHOS sdk info read failed: %v", err)
+	}
+
+	// 解析JSON到结构体
+	var config meta.OhosSdkInfo
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parse OHOS sdk info failed: %v", err)
+	}
+	return &config, nil
 }
 
 func SaveConfig(path string, c *config.Config) error {

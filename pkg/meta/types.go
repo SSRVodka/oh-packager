@@ -2,42 +2,12 @@ package meta
 
 import "time"
 
-// Package metadata structure
-type PackageMetadata struct {
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	Architecture string   `json:"architecture"`
-	Description  string   `json:"description"`
-	Dependencies []string `json:"dependencies"`
-	Maintainer   string   `json:"maintainer"`
-	Homepage     string   `json:"homepage,omitempty"`
-}
-
-// Repository index entry
-type PackageIndex struct {
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	Architecture string   `json:"architecture"`
-	Filename     string   `json:"filename"`
-	SHA256       string   `json:"sha256"`
-	Size         int64    `json:"size"`
-	Dependencies []string `json:"dependencies"`
-	Description  string   `json:"description"`
-}
-
-// Repository metadata
-type RepositoryIndex struct {
-	Repository   string         `json:"repository"`
-	Architecture string         `json:"architecture"`
-	LastUpdated  string         `json:"last_updated"`
-	Packages     []PackageIndex `json:"packages"`
-}
-
 // Manifest describes a package.
 type Manifest struct {
 	Name          string   `json:"name"`
 	Version       string   `json:"version"`
 	Arch          string   `json:"arch"`
+	OhosApi       string   `json:"ohos_api"`
 	Format        int      `json:"format_version"`
 	Summary       string   `json:"summary,omitempty"`
 	Description   string   `json:"description,omitempty"`
@@ -61,11 +31,18 @@ type Index struct {
 }
 
 type IndexEntry struct {
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Arch     string `json:"arch"`
-	URL      string `json:"url"`
-	SHA256   string `json:"sha256"`
-	Size     int64  `json:"size"`
-	Manifest string `json:"manifest,omitempty"`
+	Name     string   `json:"name"`
+	Version  string   `json:"version"`
+	Arch     string   `json:"arch"`
+	OhosApi  string   `json:"ohos_api"`
+	URL      string   `json:"url"`
+	SHA256   string   `json:"sha256"`
+	Size     int64    `json:"size"`
+	Manifest string   `json:"manifest,omitempty"`
+	Depends  []string `json:"depends,omitempty"`
+}
+
+type OhosSdkInfo struct {
+	// ONLY need this one for now
+	ApiVersion string `json:"apiVersion"`
 }
