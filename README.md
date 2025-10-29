@@ -14,7 +14,7 @@ Use `--help` for more details.
 Package a compiled library:
 
 ```shell
-oh-pkgtool -a aarch64 -n console_bridge -i ./compiled_lib -v 0.0.1
+oh-pkgtool -a aarch64 --api 15 -n console_bridge -i ./compiled_lib -v 0.0.1
 ```
 
 Create a hosting repository:
@@ -26,7 +26,7 @@ oh-pkgserver init --repo ./repo
 Deploy a package to the repository:
 
 ```shell
-oh-pkgserver deploy ./console_bridge-0.0.1-aarch64.pkg ./console_bridge-0.0.1-aarch64.json --repo ./repo
+oh-pkgserver deploy ./console_bridge-0.0.1-aarch64-api15.pkg ./console_bridge-0.0.1-aarch64-api15.json --repo ./repo
 ```
 
 
@@ -47,11 +47,11 @@ oh-pkgmgr list
 Install the package from the repository:
 
 ```shell
-oh-pkgmgr install console_bridge --prefix ./dist
+oh-pkgmgr add console_bridge --prefix ./dist
 ```
 
 Install the package to OpenHarmony SDK:
 
 ```shell
-oh-pkgmgr add2sdk console_bridge
+oh-pkgmgr add console_bridge
 ```
