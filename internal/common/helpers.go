@@ -346,6 +346,7 @@ func EnsureChannelDirs(basePath, channel string) (string, error) {
 	return channelPath, nil
 }
 
+// TODO: use different channel for difference arch
 // DeployPackage copies .pkg and .json manifest into channel pkgs and regenerates index.
 func DeployPackage(basePath, channel, pkgFile, manifestFile string) error {
 	if pkgFile == "" || manifestFile == "" {

@@ -219,8 +219,9 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 	}
 
 	// Resolve dependencies (returns chosen versions map)
+	// assert lastArch != ""
 	fmt.Printf("Resolving dependencies...\n")
-	chosen, err := c.ResolveDependencies(pkgs)
+	chosen, err := c.ResolveDependencies(pkgs, lastArch)
 	if err != nil {
 		return err
 	}
@@ -444,7 +445,7 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 // ResolveDependencies takes initial requested package names (each string may be a simple name)
 // and returns a map[name]IndexEntry of chosen versions to install (values order not guaranteed).
 // It uses index.json and package manifests for transitive deps.
-func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexEntry, error) {
+func (c *Client) ResolveDependencies(requested []string, arch string) (map[string]meta.IndexEntry, error) {
 	// load index
 	idx, err := c.loadIndex()
 	if err != nil {
@@ -459,6 +460,9 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 	// build entries-by-name map from index
 	byName := map[string][]meta.IndexEntry{}
 	for _, e := range idx.Packages {
+		if arch != e.Arch {
+			continue
+		}
 		byName[e.Name] = append(byName[e.Name], e)
 	}
 	// sort each list by semver descending
