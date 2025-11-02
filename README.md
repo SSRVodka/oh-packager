@@ -38,11 +38,22 @@ Configure your client first:
 oh-pkgmgr -a aarch64 -d <your sdk directory> -s <repository URL>
 ```
 
+For example you can use my repo:
+
+```shell
+oh-pkgmgr -a aarch64 -d <your sdk directory> -s https://raw.githubusercontent.com/SSRVodka/oh_pkg_repo/main
+```
+
+
 Check package list on the repository:
 
 ```shell
 oh-pkgmgr list
 ```
+
+> [!WARNING]
+>
+> The installation is irreversible for now. Make sure to double check your prefix or backup your SDK if needed.
 
 Install the package from the repository:
 

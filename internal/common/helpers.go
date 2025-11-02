@@ -10,17 +10,63 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/SSRVodka/oh-packager/pkg/meta"
+	"github.com/blang/semver/v4"
 	"github.com/mholt/archiver/v3"
+)
+
+// Constraint represents a single operator constraint on a version.
+type Constraint struct {
+	Op  string // one of ">=", "<=", ">", "<", "==", "" (empty = any)
+	Ver string // version string
+}
+
+var (
+	// Regex to match valid operators: >=, <=, >, <, ==
+	validOps = map[string]bool{
+		">=": true,
+		"<=": true,
+		">":  true,
+		"<":  true,
+		"==": true,
+	}
+
+	// Pattern to extract name, operator, and version from dependency string
+	// Matches: name followed by optional (operator + version)
+	//  ^([^\s<>=]+)       -> capture the name: one or more chars that are not whitespace or <,>,=
+	//  \s*                -> optional spaces
+	//  (>=|<=|>|<|==)     -> capturing group for an operator (must be contiguous)
+	//  \s*(.*)$            -> optional spaces then the rest is the version (capture)
+	depPattern = regexp.MustCompile(`^([^\s<>=]+)\s*(>=|<=|>|<|==)?\s*(.*)$`)
 )
 
 // Get the absolute path in this system
 func GetAbsolutePath(path string) (string, error) {
 	return filepath.Abs(path)
+}
+
+func GetOhosArchDepLibDirRelPath(arch string) (string, error) {
+	var err error
+	arch, err = MapArchStr(arch)
+	return "lib/" + arch + "-linux-ohos", err
+}
+
+func GetInvalidPkgNameCharsInStr() string {
+	return ">< =&|;,"
+}
+
+func GetDepsSepCharsInStr() string {
+	return ",;&|"
+}
+
+func GetPostInstScriptName() string {
+	return "postinst"
 }
 
 // Check directory exists
@@ -70,6 +116,21 @@ func IsPkgPath(path string) bool {
 	return true
 }
 
+func isValidPkg(path string) bool {
+	// simple impl
+	return IsPkgPath(path)
+}
+
+func ExecuteShell(scriptPath string, args ...string) (string, error) {
+	cmd := exec.Command(scriptPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("error while executing shell '%s': %v, output: %s", scriptPath, err, string(output))
+	}
+
+	return string(output), nil
+}
+
 // ASSUME: pkgVersion & pkgArch & pkgAPI doesn't contains '-'
 
 func GenPkgFileName(pkgName, pkgVersion, pkgArch, pkgAPI string) string {
@@ -94,6 +155,62 @@ func ParsePkgNameFromPath(path string) (string, string, string, string, error) {
 	pkgVersion := tokens[tl-3]
 	tokens = tokens[:tl-3]
 	return strings.Join(tokens, "-"), pkgVersion, pkgArch, pkgAPI, nil
+}
+
+// ParseDep parses dependency tokens like:
+//
+//	"libfoo >= 1.2.3"
+//	"libbar == 1.0.0"
+//	"openssl"
+//	"libfoo<1.0"
+//
+// Returns (name, constraint, error).
+func ParseDep(dep string) (string, Constraint, error) {
+	dep = strings.TrimSpace(dep)
+	if dep == "" {
+		return "", Constraint{}, fmt.Errorf("empty dependency string")
+	}
+
+	matches := depPattern.FindStringSubmatch(dep)
+	if matches == nil {
+		return "", Constraint{}, fmt.Errorf("invalid dependency format: %s", dep)
+	}
+
+	name := strings.TrimSpace(matches[1])
+	op := matches[2]
+	verStr := strings.TrimSpace(matches[3])
+
+	// Case 1: No operator - just a package name
+	if op == "" && verStr == "" {
+		return name, Constraint{Op: "", Ver: ""}, nil
+	}
+
+	// Case 2: Operator without version
+	if op != "" && verStr == "" {
+		return "", Constraint{}, fmt.Errorf("operator '%s' specified but no version provided", op)
+	}
+
+	// Case 3: Version without operator (invalid)
+	if op == "" && verStr != "" {
+		return "", Constraint{}, fmt.Errorf("version '%s' specified but no operator provided", verStr)
+	}
+
+	// Case 4: Both operator and version present
+	// Remove quotes from version if present
+	verStr = strings.Trim(verStr, `"'`)
+
+	// Validate the operator (this catches cases like "< =" which would be parsed as "<" with ver "= 0.0.1")
+	if !validOps[op] {
+		return "", Constraint{}, fmt.Errorf("invalid operator: %s", op)
+	}
+
+	// Validate semantic version using semver library
+	_, err := semver.ParseTolerant(verStr)
+	if err != nil {
+		return "", Constraint{}, fmt.Errorf("invalid semantic version '%s': %w", verStr, err)
+	}
+
+	return name, Constraint{Op: op, Ver: verStr}, nil
 }
 
 func JoinURL(base, rel string) string {
@@ -132,7 +249,7 @@ func ComputeSHA256(path string) (string, error) {
 }
 
 // TarGzDir creates a tar.gz archive from srcDir and writes to outPath.
-func TarGzDir(srcDir, outPath string) error {
+func TarGzDir(srcDir, outPath string, includedPaths []string, excludedNames []string) error {
 	// validate source
 	info, err := os.Stat(srcDir)
 	if err != nil {
@@ -162,9 +279,14 @@ func TarGzDir(srcDir, outPath string) error {
 		return err
 	}
 	var paths []string
+	var excludedSet map[string]struct{} = sliceToSet(excludedNames)
 	for _, e := range entries {
+		if _, isExcluded := excludedSet[e.Name()]; isExcluded {
+			continue
+		}
 		paths = append(paths, filepath.Join(srcDir, e.Name()))
 	}
+	paths = append(paths, includedPaths...)
 	// Use archiver.DefaultTarGz to force tar.gz format regardless of extension.
 	if err := archiver.DefaultTarGz.Archive(paths, newTarGzPath); err != nil {
 		return err
@@ -239,6 +361,11 @@ func DeployPackage(basePath, channel, pkgFile, manifestFile string) error {
 	manifest, err := ReadManifest(manifestFile)
 	if err != nil {
 		return err
+	}
+
+	// validate package
+	if !isValidPkg(pkgFile) {
+		return fmt.Errorf("not a valid package file: %s", pkgFile)
 	}
 
 	// destination names
@@ -368,4 +495,12 @@ func fileSize(path string) (int64, error) {
 		return 0, err
 	}
 	return fi.Size(), nil
+}
+
+func sliceToSet[T int | string](slice []T) map[T]struct{} {
+	m := make(map[T]struct{}, len(slice))
+	for _, s := range slice {
+		m[s] = struct{}{}
+	}
+	return m
 }

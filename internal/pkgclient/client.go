@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -41,7 +42,7 @@ func NewClient(cfg *config.Config) *Client {
 // ListPackages fetches index.json and prints packages for arch.
 func (c *Client) ListPackages(arch string) error {
 	if c.Config.RootURL == "" {
-		return errors.New("root URL not configured (use --help for more info)")
+		return errors.New("repo URL not configured (use --help for more info)")
 	}
 	// Some deployments put channels directly under root; try both patterns.
 	// Try root/channels/<channel>/index.json
@@ -121,38 +122,45 @@ func (c *Client) download(choice meta.IndexEntry) (string, string, error) {
 	return pkgPath, choice.Version, nil
 }
 
-/** @return (finalDir, error) */
+// extract components (`common.GetInstallComponents()`) to `prefix`
+//
+// @return (extraction temp dir, error)
 func (c *Client) extract(pkgPath, pkgName, pkgVersion, prefix string) (string, error) {
-	// extract to prefix/<name>-<version>.tmp -> then rename to <name>-<version>
+	// extract to prefix/<name>-<version>.tmp
 	tmpDir := filepath.Join(prefix, fmt.Sprintf(".%s-%s.tmp", pkgName, pkgVersion))
-	finalDir := filepath.Join(prefix, fmt.Sprintf("%s-%s", pkgName, pkgVersion))
-	link := filepath.Join(prefix, pkgName)
 
 	if err := os.MkdirAll(prefix, 0o755); err != nil {
-		return "", err
+		return tmpDir, err
 	}
 	// cleanup any previous tmp
 	_ = os.RemoveAll(tmpDir)
 	if err := common.ExtractTarGz(pkgPath, tmpDir); err != nil {
-		return "", err
+		return tmpDir, err
 	}
-	// rename tmp to final (atomic on same fs)
-	if err := os.Rename(tmpDir, finalDir); err != nil {
-		return "", err
+	// copy components
+	for _, component := range common.GetInstallComponents() {
+		srcDir := filepath.Join(tmpDir, component)
+		dstDir := filepath.Join(prefix, component)
+		if !common.IsDirExists(srcDir) {
+			if !common.IsOptionalInstallComponent(component) {
+				fmt.Printf(" - WARN: package '%s' doesn't have component '%s'\n", pkgName, component)
+			}
+			continue
+		}
+		fmt.Printf(" - copying %s -> %s\n", srcDir, dstDir)
+		if err := common.CopyDirContents(srcDir, dstDir); err != nil {
+			return tmpDir, fmt.Errorf("failed to extract component '%s': %v", component, err)
+		}
 	}
-	// update symlink atomically
-	_ = os.Remove(link)
-	if err := os.Symlink(filepath.Base(finalDir), link); err != nil {
-		return "", err
-	}
-	return finalDir, nil
+	return tmpDir, nil
 }
 
-/**
- * @param[in] prefix only valid when toSdk == false
- * @return (finalDir, error)
- */
-func (c *Client) install(pkgNameOrLocalFileList []string, toSdk bool, prefix string) error {
+// @param[in] prefix only valid when toSdk == false
+//
+// @return (finalDir, error)
+//
+// @note prefix must be an absolute path
+func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool) error {
 
 	var localSdkInfo *meta.OhosSdkInfo
 	var loadSdkErr error
@@ -160,11 +168,12 @@ func (c *Client) install(pkgNameOrLocalFileList []string, toSdk bool, prefix str
 		return loadSdkErr
 	}
 
-	if toSdk {
-		prefix = filepath.Join(c.Config.OhosSdk, "native", "sysroot", "usr")
-		if !common.IsDirExists(prefix) {
-			return fmt.Errorf("invalid OHOS sdk directory tree: directory '%s' not exists", prefix)
-		}
+	if c.Config.RootURL == "" {
+		return fmt.Errorf("repo URL not configured (use --help for more info)")
+	}
+
+	if len(pkgNameOrLocalFileList) == 0 {
+		return fmt.Errorf("empty install list")
 	}
 
 	lastArch := ""
@@ -216,32 +225,52 @@ func (c *Client) install(pkgNameOrLocalFileList []string, toSdk bool, prefix str
 		return err
 	}
 
-	// open DB once
-	db, err := OpenDB(c.DBPath)
-	if err != nil {
-		return err
+	// ask for confirmation
+	if !noConfirm {
+		fmt.Printf("We are going to install (%s, API %s): \n", lastArch, localSdkInfo.ApiVersion)
+		for name, e := range chosen {
+			fmt.Printf(" - %s (%s)\n", name, e.Version)
+		}
+		fmt.Printf("--------------------------\n")
+		fmt.Printf("Install Prefix: %s\n", prefix)
+		fmt.Printf("--------------------------\n")
+		ok, confirmErr := common.ConfirmAction(
+			"Installation is irrevisible. Make sure to check your prefix before you proceed. (Y/[n]) ")
+		if confirmErr != nil {
+			return confirmErr
+		}
+		if !ok {
+			fmt.Printf("Installation abort.\n")
+			return nil
+		}
 	}
-	defer db.Close()
+
+	// // open DB once
+	// db, err := OpenDB(c.DBPath)
+	// if err != nil {
+	// 	return err
+	// }
+	// defer db.Close()
 
 	for name, entry := range chosen {
 		fmt.Printf("Preparing %s %s\n", name, entry.Version)
 
-		// check installed
-		installed, err := db.GetInstalled(name, prefix)
-		if err != nil {
-			return err
-		}
-		if installed != nil && installed.Version == entry.Version {
-			fmt.Printf(" - %s already installed at same version %s, skipping\n", name, entry.Version)
-			continue
-		}
-		if installed != nil && installed.Version != entry.Version {
-			// uninstall previous
-			if err := c.uninstallDB(db, name, prefix); err != nil {
-				return err
-			}
-			fmt.Printf(" - removed previous version %s\n", installed.Version)
-		}
+		// // check installed
+		// installed, err := db.GetInstalled(name, prefix)
+		// if err != nil {
+		// 	return err
+		// }
+		// if installed != nil && installed.Version == entry.Version {
+		// 	fmt.Printf(" - %s already installed at same version %s, skipping\n", name, entry.Version)
+		// 	continue
+		// }
+		// if installed != nil && installed.Version != entry.Version {
+		// 	// uninstall previous
+		// 	if err := c.uninstallDB(db, name, prefix); err != nil {
+		// 		return err
+		// 	}
+		// 	fmt.Printf(" - removed previous version %s\n", installed.Version)
+		// }
 
 		var curPkgPath, curPkgVer string
 		if f, ok := name2pkgPath[name]; !ok {
@@ -258,82 +287,157 @@ func (c *Client) install(pkgNameOrLocalFileList []string, toSdk bool, prefix str
 		}
 
 		fmt.Printf("Extracting %s %s\n", name, curPkgVer)
-		finalDir, exErr := c.extract(curPkgPath, name, curPkgVer, prefix)
+		tmpDir, exErr := c.extract(curPkgPath, name, curPkgVer, prefix)
 		if exErr != nil {
 			return exErr
 		}
 
-		if toSdk {
-			srcLibDir := filepath.Join(finalDir, "lib")
-			dstLibDir := filepath.Join(prefix, "lib")
-			archDepSrcLibDir := filepath.Join(srcLibDir, entry.Arch+"-linux-ohos")
-			archDepDstLibDir := filepath.Join(dstLibDir, entry.Arch+"-linux-ohos")
-			if !common.IsDirExists(archDepDstLibDir) {
-				return fmt.Errorf("invalid OHOS sdk directory tree: lib dir '%s' not exists", dstLibDir)
-			}
-			srcHeaderDir := filepath.Join(finalDir, "include")
-			dstHeaderDir := filepath.Join(prefix, "include")
-			if !common.IsDirExists(dstHeaderDir) {
-				return fmt.Errorf("invalid OHOS sdk directory tree: header dir '%s' not exists", dstHeaderDir)
-			}
-			srcShareDir := filepath.Join(finalDir, "share")
-			dstShareDir := filepath.Join(prefix, "share")
-			if !common.IsDirExists(dstShareDir) {
-				return fmt.Errorf("invalid OHOS sdk directory tree: share dir '%s' not exists", dstShareDir)
-			}
-			// check arch-dep libs in arch-indep directory
-			var libFiles []string
-			var err error
-			// Check if there are architecture dependent libraries in dstLibDir
-			if libFiles, err = common.ListDir(srcLibDir); err != nil {
-				return err
-			}
-			for _, l := range libFiles {
-				if common.IsArchDependentLib(l) {
-					fmt.Printf(
-						" - WARNING: architecture-dependent library '%s' in arch-independent directory; This library may not be configured correctly.\n"+
-							"If this is not what you want, please clean build cache & make sure you've setup flags correctly like --libdir at compile time\n", l)
-				}
-			}
+		// patch libraries for development
+		archDepRelPath, archErr := common.GetOhosArchDepLibDirRelPath(entry.Arch)
+		if archErr != nil {
+			return archErr
+		}
+		dstArchLibDir := filepath.Join(prefix, archDepRelPath)
+		fmt.Printf("Patching libraries of package '%s'\n", name)
+		c.patchLibFiles(dstArchLibDir, prefix)
 
-			if common.IsDirExists(archDepSrcLibDir) {
-				fmt.Printf(" - Copying libraries (in '%s') to sdk...\n", name)
-				if err := common.CopyDirContents(archDepSrcLibDir, archDepDstLibDir); err != nil {
-					return err
+		// executing script attachments
+		if common.IsDirExists(tmpDir) {
+			postInstScriptPath := filepath.Join(tmpDir, common.GetPostInstScriptName())
+			if common.IsFileExists(postInstScriptPath) {
+				// execute it with install prefix
+				fmt.Printf("Executing post-installation script...\n")
+				outStr, exeErr := common.ExecuteShell(postInstScriptPath, prefix)
+				if exeErr != nil {
+					return exeErr
 				}
-			} else {
-				fmt.Printf(" - NOTE: package does NOT have any architecture-dependent libraries for OHOS\n")
-			}
-			if common.IsDirExists(srcHeaderDir) {
-				fmt.Printf(" - Copying headers (in '%s') to sdk...\n", name)
-				if err := common.CopyDirContents(srcHeaderDir, dstHeaderDir); err != nil {
-					return err
+				fmt.Println("##################################")
+				if strings.TrimSpace(outStr) == "" {
+					fmt.Print("(empty output)")
+				} else {
+					fmt.Print(outStr)
 				}
-			} else {
-				fmt.Printf(" - NOTE: package does NOT have any headers\n")
+				fmt.Println("\n##################################")
 			}
-			if common.IsDirExists(srcShareDir) {
-				fmt.Printf(" - Copying shared resources (in '%s') to sdk\n", name)
-				if err := common.CopyDirContents(srcShareDir, dstShareDir); err != nil {
-					return err
-				}
-			} else {
-				fmt.Printf(" - NOTE: package does NOT have any shared resources\n")
-			}
+			// clean up temporary directory
+			fmt.Println("Cleaning temporary files...")
+			// ignore errors
+			os.RemoveAll(tmpDir)
+		}
 
-			// remove the redundant dirs (ignore errors)
-			os.RemoveAll(finalDir)
-			os.RemoveAll(filepath.Join(prefix, name))
-		} else {
-			// ONLY record for non-sdk installation
-			// record in DB
-			if err := db.InsertInstalled(name, curPkgVer, entry.Arch, prefix, finalDir); err != nil {
-				return err
+		// // record in DB
+		// if err := db.InsertInstalled(name, curPkgVer, entry.Arch, prefix, finalDir); err != nil {
+		// 	return err
+		// }
+
+		fmt.Printf("Installed %s %s -> %s\n\n", name, curPkgVer, prefix)
+	}
+
+	fmt.Printf("\nFinish installation: %d packages installed\n\n", len(chosen))
+
+	return nil
+}
+
+// PatchLibFiles patches .la and .pc files in dstArchLibDir similarly to the shell snippet.
+// dstArchLibDir must be an absolute or relative path (comes from env in your description).
+// Returns an error if one or more file operations fail.
+// NOTE: dstArchLibDir and installPrefix must be absolute paths
+func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
+	if !common.IsDirExists(dstArchLibDir) {
+		fmt.Printf(" - WARN: specific directory '%s' not exists while patching libraries. Skipped\n", dstArchLibDir)
+		return nil
+	}
+
+	var errors []string
+
+	// 1) patch *.la files: replace libdir='.*' -> libdir='666'
+	laPattern := filepath.Join(dstArchLibDir, "*.la")
+	laFiles, err := filepath.Glob(laPattern)
+	if err != nil {
+		return fmt.Errorf("glob %q: %w", laPattern, err)
+	}
+
+	reLibdirLa := regexp.MustCompile(`libdir='.*'`)
+	for _, la := range laFiles {
+		info, statErr := os.Stat(la)
+		if statErr != nil {
+			// If file disappeared between glob and stat, skip
+			errors = append(errors, fmt.Sprintf("stat %s: %v", la, statErr))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			fmt.Printf(" - skip irregular file '%s'", info.Name())
+			continue
+		}
+
+		fmt.Printf(" - patching library archive file generated by libtool: %s\n", la)
+
+		content, readErr := os.ReadFile(la)
+		if readErr != nil {
+			errors = append(errors, fmt.Sprintf("read %s: %v", la, readErr))
+			continue
+		}
+
+		libDirInLa := fmt.Sprintf("libdir='%s'", dstArchLibDir)
+		mod := reLibdirLa.ReplaceAll(content, []byte(libDirInLa))
+
+		// Only write if changed
+		if string(mod) != string(content) {
+			if writeErr := os.WriteFile(la, mod, info.Mode().Perm()); writeErr != nil {
+				errors = append(errors, fmt.Sprintf("write %s: %v", la, writeErr))
+				continue
 			}
-			fmt.Printf("Installed %s %s -> %s\n", name, curPkgVer, finalDir)
 		}
 	}
 
+	// 2) patch pkgconfig/*.pc files:
+	pcPattern := filepath.Join(dstArchLibDir, "pkgconfig", "*.pc")
+	pcFiles, err := filepath.Glob(pcPattern)
+	if err != nil {
+		return fmt.Errorf("glob %q: %w", pcPattern, err)
+	}
+
+	// use multiline regex anchors to replace full lines:
+	rePrefix := regexp.MustCompile(`(?m)^prefix=.*`)
+	reLibdirPc := regexp.MustCompile(`(?m)^libdir=.*`)
+	reIncludedir := regexp.MustCompile(`(?m)^(includedir=).*(/include/.*)$`)
+	for _, pc := range pcFiles {
+		info, statErr := os.Stat(pc)
+		if statErr != nil {
+			errors = append(errors, fmt.Sprintf("stat %s: %v", pc, statErr))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			fmt.Printf(" - skip irregular file '%s'", info.Name())
+			continue
+		}
+
+		fmt.Printf(" - patching pkg-config file generated by Makefile: %s\n", pc)
+
+		contentBytes, readErr := os.ReadFile(pc)
+		if readErr != nil {
+			errors = append(errors, fmt.Sprintf("read %s: %v", pc, readErr))
+			continue
+		}
+		content := string(contentBytes)
+
+		content = rePrefix.ReplaceAllString(content, "prefix="+installPrefix)
+		// replace libdir line with the dstArchLibDir value
+		content = reLibdirPc.ReplaceAllString(content, "libdir="+dstArchLibDir)
+		content = reIncludedir.ReplaceAllString(content, "${1}"+installPrefix+"${2}")
+
+		// Only write if changed
+		if content != string(contentBytes) {
+			if writeErr := os.WriteFile(pc, []byte(content), info.Mode().Perm()); writeErr != nil {
+				errors = append(errors, fmt.Sprintf("write %s: %v", pc, writeErr))
+				continue
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("some operations failed while patching libraries:\n%s", strings.Join(errors, "\n"))
+	}
 	return nil
 }
 
@@ -370,15 +474,23 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 	constraints := map[string][]common.Constraint{}
 	queue := []string{}
 
-	// initial requested: they may be plain names. For now we treat requested as name-only.
+	// initial requested: they may be plain names/empty
 	for _, r := range requested {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			continue
 		}
-		if _, ok := constraints[r]; !ok {
-			constraints[r] = []common.Constraint{}
-			queue = append(queue, r)
+		depName, depConstraints, depErr := common.ParseDep(r)
+		if depErr != nil {
+			return nil, fmt.Errorf("error while resolving dependencies for '%s': %+v", r, depErr)
+		}
+		oldConstraints, hasConstraints := constraints[depName]
+		if hasConstraints {
+			constraints[depName] = append(oldConstraints, depConstraints)
+		} else {
+			// first time check for depName: add to queue
+			constraints[depName] = []common.Constraint{depConstraints}
+			queue = append(queue, depName)
 		}
 	}
 
@@ -402,10 +514,10 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 			return nil, fmt.Errorf("dependency %q not found in index", name)
 		}
 		// pick first (latest) candidate satisfying constraints[name]
-		cands := constraints[name]
+		curConstraints := constraints[name]
 		var chosenEntry *meta.IndexEntry
 		for _, e := range candList {
-			if common.SatisfiesConstraints(e.Version, cands) && e.OhosApi == sdkInfo.ApiVersion {
+			if common.SatisfiesConstraints(e.Version, curConstraints) && e.OhosApi == sdkInfo.ApiVersion {
 				tmp := e
 				chosenEntry = &tmp
 				break
@@ -414,7 +526,7 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 		if chosenEntry == nil {
 			// no candidate found
 			return nil, fmt.Errorf("no version of %s satisfies constraints %+v and OHOS API %s",
-				name, cands, sdkInfo.ApiVersion)
+				name, curConstraints, sdkInfo.ApiVersion)
 		}
 
 		// select it
@@ -424,7 +536,10 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 		curDeps := chosenEntry.Depends
 		// iterate declared dependencies and merge constraints
 		for _, dep := range curDeps {
-			depName, depC := common.ParseDep(dep)
+			depName, depC, parseErr := common.ParseDep(dep)
+			if parseErr != nil {
+				return nil, fmt.Errorf("error while resolving dependencies for '%s': %+v", dep, parseErr)
+			}
 			// append constraint
 			cur := constraints[depName]
 			// if depName not seen before, queue it
@@ -439,15 +554,22 @@ func (c *Client) ResolveDependencies(requested []string) (map[string]meta.IndexE
 }
 
 // Install downloads and installs the named package into OHOS sdk
-func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string) error {
-
-	return c.install(pkgNameOrLocalFileList, true, "")
+func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string, noConfirm bool) error {
+	if c.Config.OhosSdk == "" {
+		return errors.New("OHOS SDK path not configured (use --help for more info)")
+	}
+	prefix := filepath.Join(c.Config.OhosSdk, "native", "sysroot", "usr")
+	if !common.IsDirExists(prefix) {
+		return fmt.Errorf("invalid OHOS sdk directory tree: directory '%s' not exists", prefix)
+	}
+	return c.install(pkgNameOrLocalFileList, prefix, noConfirm)
 }
 
 // Install downloads and installs the named package into prefix.
-func (c *Client) Install(pkgNameOrLocalFileList []string, prefix string) error {
+// @note prefix must be an absolute path
+func (c *Client) Install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool) error {
 
-	return c.install(pkgNameOrLocalFileList, false, prefix)
+	return c.install(pkgNameOrLocalFileList, prefix, noConfirm)
 }
 
 // Uninstall removes installed package from prefix.

@@ -12,14 +12,14 @@ import (
 func main() {
 	var rootURL, arch, channel, ohosSdkDir, ohosSdkDirAbs string
 	root := &cobra.Command{
-		Use:   "pkgclient",
+		Use:   "oh-pkgmgr",
 		Short: "Client for the package repo (list, install, uninstall, config)",
 	}
 
 	// CONFIG
 	cfgCmd := &cobra.Command{
 		Use:   "config",
-		Short: "Configure client",
+		Short: "Configure client with repo URL, OHOS SDK path, etc.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := common.DefaultConfigPath()
 			c, err := common.LoadConfig(cfg)
@@ -27,7 +27,7 @@ func main() {
 				c = common.DefaultConfig()
 			}
 			if rootURL == "" {
-				return fmt.Errorf("the server root URL is required")
+				return fmt.Errorf("the repo root URL is required")
 			}
 			if !common.IsValidHttpUrl(rootURL) {
 				return fmt.Errorf("invalid http URL: '%s'", rootURL)
@@ -73,7 +73,8 @@ func main() {
 			cfgFile := common.DefaultConfigPath()
 			cfg, err := common.LoadConfig(cfgFile)
 			if err != nil {
-				return err
+				fmt.Printf("failed to load client config: %+v\n", err)
+				return nil
 			}
 			cl := pkgclient.NewClient(cfg)
 			arch := archFlag
@@ -87,28 +88,31 @@ func main() {
 
 	// INSTALL
 	var prefix string
+	var noConfirm bool
 	installCmd := &cobra.Command{
 		Use:   "add <package> [package...]",
-		Short: "Install one or more packages to prefix. Empty prefix indicates installing to OHOS sdk (irreversible)",
+		Short: "Install one or more packages to prefix (irreversible). Empty prefix indicates installing to OHOS sdk",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfgFile := common.DefaultConfigPath()
 			cfg, err := common.LoadConfig(cfgFile)
 			if err != nil {
-				return err
+				fmt.Printf("failed to load client config: %+v\n", err)
+				return nil
 			}
 			cl := pkgclient.NewClient(cfg)
 			if prefix == "" {
-				return cl.InstallToSdk(args)
+				return cl.InstallToSdk(args, noConfirm)
 			}
 			var prefixErr error
 			prefix, prefixErr = common.GetAbsolutePath(prefix)
 			if prefixErr != nil {
 				return prefixErr
 			}
-			return cl.Install(args, prefix)
+			return cl.Install(args, prefix, noConfirm)
 		},
 	}
+	installCmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "install without interaction/prompt")
 	installCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required for non OHOS sdk installation)")
 
 	// UNINSTALL
@@ -120,7 +124,8 @@ func main() {
 			cfgFile := common.DefaultConfigPath()
 			cfg, err := common.LoadConfig(cfgFile)
 			if err != nil {
-				return err
+				fmt.Printf("failed to load client config: %+v\n", err)
+				return nil
 			}
 			cl := pkgclient.NewClient(cfg)
 			pkg := args[0]
@@ -137,7 +142,9 @@ func main() {
 	}
 	uninstallCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required)")
 
-	root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
+	// uninstall not supported for now
+	// root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
+	root.AddCommand(cfgCmd, listCmd, installCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

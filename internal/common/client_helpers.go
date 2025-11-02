@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,37 +21,16 @@ import (
 
 const DEFAULT_CONFIG_DIR string = "oh_pkgmgr"
 
-// Constraint represents a single operator constraint on a version.
-type Constraint struct {
-	Op  string // one of ">=", "<=", ">", "<", "==", "" (empty = any)
-	Ver string // version string
+func GetInstallExcluded() []string {
+	return []string{"libexec"}
 }
 
-// parseDep parses a dependency token like:
-//
-//	"libfoo >= 1.2.3"
-//	"libbar == 1.0.0"
-//	"openssl"
-//
-// returns name, Constraint (op=="" if none)
-func ParseDep(dep string) (string, Constraint) {
-	dep = strings.TrimSpace(dep)
-	// split by first space
-	parts := strings.Fields(dep)
-	if len(parts) == 1 {
-		return parts[0], Constraint{Op: "", Ver: ""}
-	}
-	// expected: name op version
-	name := parts[0]
-	if len(parts) >= 3 {
-		op := parts[1]
-		ver := parts[2]
-		// strip quotes if any
-		ver = strings.Trim(ver, `"'`)
-		return name, Constraint{Op: op, Ver: ver}
-	}
-	// fallback: treat as name only
-	return dep, Constraint{Op: "", Ver: ""}
+func GetInstallComponents() []string {
+	return []string{"include", "lib", "share", "bin", "sbin"}
+}
+
+func IsOptionalInstallComponent(component string) bool {
+	return component == "sbin" || component == "share" || component == "bin"
 }
 
 // satisfies checks if version satisfies all constraints
@@ -136,6 +116,9 @@ func DefaultConfigPath() string {
 }
 
 func LoadConfig(path string) (*config.Config, error) {
+	if !IsFileExists(path) {
+		return nil, fmt.Errorf("please use 'config' to configure your client first")
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -280,9 +263,11 @@ func ListDir(dir string) ([]string, error) {
 
 // copy all the contents (including links) in `srcDir` to `dstDir` (overwrite)
 // e.g., {a/1.txt,a/b/c/2.txt} -> CopyDirContents(a, d) -> {d/1.txt,d/b/c/2.txt}
-
+//   - Real directories (recurse into them)
+//   - Symlinks to directories (copy the symlink itself, don't follow)
+//   - Regular files (copy them)
+//   - Symlinks to files (copy the symlink itself)
 func CopyDirContents(srcDir, dstDir string) error {
-
 	// Resolve absolute paths to detect overlaps
 	absSrc, err := filepath.Abs(srcDir)
 	if err != nil {
@@ -292,11 +277,29 @@ func CopyDirContents(srcDir, dstDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve destination path: %w", err)
 	}
-
 	// Prevent copying to itself or subdirectory
 	if absSrc == absDst || strings.HasPrefix(absDst, absSrc+string(filepath.Separator)) {
 		return fmt.Errorf("destination cannot be same as or inside source")
 	}
+
+	// Use a visited map to track real paths and prevent infinite recursion
+	visited := make(map[string]bool)
+	return copyDirContentsRecursive(srcDir, dstDir, visited)
+}
+
+func copyDirContentsRecursive(srcDir, dstDir string, visited map[string]bool) error {
+	// Resolve the real path to detect symlink cycles
+	realSrc, err := filepath.EvalSymlinks(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve symlinks for %s: %w", srcDir, err)
+	}
+
+	// Check if we've already visited this real path
+	if visited[realSrc] {
+		// Skip to avoid infinite recursion
+		return nil
+	}
+	visited[realSrc] = true
 
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
@@ -312,18 +315,60 @@ func CopyDirContents(srcDir, dstDir string) error {
 		srcPath := filepath.Join(srcDir, entry.Name())
 		dstPath := filepath.Join(dstDir, entry.Name())
 
-		if entry.IsDir() {
-			// Recursively copy subdirectories
-			if err := CopyDirContents(srcPath, dstPath); err != nil {
+		// Use Lstat to get info about the link itself, not what it points to
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", srcPath, err)
+		}
+
+		// Handle symbolic links
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(srcPath)
+			if err != nil {
+				return fmt.Errorf("failed to read symlink %s: %w", srcPath, err)
+			}
+
+			// Remove existing symlink/file if present
+			os.Remove(dstPath)
+
+			// Create the symlink at destination
+			if err := os.Symlink(linkTarget, dstPath); err != nil {
+				return fmt.Errorf("failed to create symlink %s: %w", dstPath, err)
+			}
+			continue
+		}
+
+		// Handle directories
+		if info.IsDir() {
+			if err := copyDirContentsRecursive(srcPath, dstPath, visited); err != nil {
 				return err
 			}
 		} else {
-			// Copy file
+			// Copy regular file
 			if err := copyFile(srcPath, dstPath); err != nil {
 				return fmt.Errorf("failed to copy file %s: %w", srcPath, err)
 			}
 		}
 	}
-
 	return nil
+}
+
+func ConfirmAction(prompt string) (bool, error) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print(prompt)
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return false, fmt.Errorf("failed to read user's confirmation: %v", err)
+	}
+
+	input = strings.TrimSpace(input)
+	input = strings.ToLower(input)
+
+	switch input {
+	case "Y", "y":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
