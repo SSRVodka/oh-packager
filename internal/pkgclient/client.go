@@ -305,7 +305,19 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 		shareDir := filepath.Join(prefix, common.GetOhosSharedDirRelPath())
 		if common.IsDirExists(shareDir) {
 			// try to patch
-			c.patchSharedFiles(shareDir, prefix)
+			c.patchLibFiles(shareDir, prefix)
+		}
+		// patch arch-dependent libs under arch-independent dir
+		irregular, readErr := common.IsArchDepLibInArchIndepDir(prefix)
+		if readErr != nil {
+			return readErr
+		}
+		if irregular {
+			fmt.Printf(
+				"WARN: this library (%s) install architecture-dependent library under architecture-independent directory, "+
+					"and it may break your SDK env if you use different architectures. Take care of it\n", name)
+			dstArchIndepLibDir := filepath.Join(prefix, common.GetOhosArchIndepLibDirRelPath())
+			c.patchLibFiles(dstArchIndepLibDir, prefix)
 		}
 
 		// executing script attachments
@@ -345,20 +357,20 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 	return nil
 }
 
-// PatchLibFiles patches .la and .pc files in dstArchLibDir similarly to the shell snippet.
-// dstArchLibDir must be an absolute or relative path (comes from env in your description).
+// PatchLibFiles patches .la and .pc files in libdir similarly to the shell snippet.
+// libdir must be an absolute or relative path (comes from env in your description).
 // Returns an error if one or more file operations fail.
-// NOTE: dstArchLibDir and installPrefix must be absolute paths
-func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
-	if !common.IsDirExists(dstArchLibDir) {
-		fmt.Printf(" - WARN: specific directory '%s' not exists while patching libraries. Skipped\n", dstArchLibDir)
+// NOTE: libdir and installPrefix must be absolute paths
+func (c *Client) patchLibFiles(libdir, installPrefix string) error {
+	if !common.IsDirExists(libdir) {
+		fmt.Printf(" - WARN: specific directory '%s' not exists while patching libraries. Skipped\n", libdir)
 		return nil
 	}
 
 	var errors []string
 
-	// 1) patch *.la files: replace libdir='.*' -> libdir='666'
-	laPattern := filepath.Join(dstArchLibDir, "*.la")
+	// 1) patch *.la files: replace libdir='.*' -> libdir='xxx'
+	laPattern := filepath.Join(libdir, "*.la")
 	laFiles, err := filepath.Glob(laPattern)
 	if err != nil {
 		return fmt.Errorf("glob %q: %w", laPattern, err)
@@ -385,7 +397,7 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 			continue
 		}
 
-		libDirInLa := fmt.Sprintf("libdir='%s'", dstArchLibDir)
+		libDirInLa := fmt.Sprintf("libdir='%s'", libdir)
 		mod := reLibdirLa.ReplaceAll(content, []byte(libDirInLa))
 
 		// Only write if changed
@@ -398,7 +410,7 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 	}
 
 	// 2) patch pkgconfig/*.pc files:
-	pcPattern := filepath.Join(dstArchLibDir, "pkgconfig", "*.pc")
+	pcPattern := filepath.Join(libdir, "pkgconfig", "*.pc")
 	pcFiles, err := filepath.Glob(pcPattern)
 	if err != nil {
 		return fmt.Errorf("glob %q: %w", pcPattern, err)
@@ -430,7 +442,7 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 
 		content = rePrefix.ReplaceAllString(content, "prefix="+installPrefix)
 		// replace libdir line with the dstArchLibDir value
-		content = reLibdirPc.ReplaceAllString(content, "libdir="+dstArchLibDir)
+		content = reLibdirPc.ReplaceAllString(content, "libdir="+libdir)
 		content = reIncludedir.ReplaceAllString(content, "${1}"+installPrefix+"${2}")
 
 		// Only write if changed
@@ -446,11 +458,6 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 		return fmt.Errorf("some operations failed while patching libraries:\n%s", strings.Join(errors, "\n"))
 	}
 	return nil
-}
-
-// patch files (*.pc) in share/ directory like xorg libraries
-func (c *Client) patchSharedFiles(shareLibDir, installPrefix string) error {
-	return c.patchLibFiles(shareLibDir, installPrefix)
 }
 
 // ResolveDependencies takes initial requested package names (each string may be a simple name)

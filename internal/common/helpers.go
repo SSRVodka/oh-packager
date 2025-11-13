@@ -51,6 +51,10 @@ func GetAbsolutePath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
+func GetOhosArchIndepLibDirRelPath() string {
+	return "lib"
+}
+
 func GetOhosArchDepLibDirRelPath(arch string) (string, error) {
 	var err error
 	arch, err = MapArchStr(arch)
@@ -71,6 +75,29 @@ func GetDepsSepCharsInStr() string {
 
 func GetPostInstScriptName() string {
 	return "postinst"
+}
+
+func IsArchDepLibInArchIndepDir(payloadDir string) (bool, error) {
+	archIndepLibDir := filepath.Join(payloadDir, "lib")
+	if IsDirExists(archIndepLibDir) {
+		// check architecture indenpendent library directory
+		entries, err := os.ReadDir(archIndepLibDir)
+		if err != nil {
+			return false, fmt.Errorf("failed to read dir '%s' while checking payload dir tree", archIndepLibDir)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			filename := entry.Name()
+			if IsArchDependentLib(filepath.Join(archIndepLibDir, filename)) {
+				return true, nil
+			}
+		}
+		// not recursive exception: arch-dependent libraries with its own directory (in arch-independent lib dir) is fine. Like python
+	}
+	return false, nil
+
 }
 
 // Check directory exists

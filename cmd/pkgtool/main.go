@@ -16,6 +16,7 @@ import (
 func main() {
 	var payloadDir, outDir, arch, ohosAPI, name, version string
 	var rawDepends, depends []string
+	var noArchLibIsolation bool
 
 	root := &cobra.Command{
 		Use:   "oh-pkgtool",
@@ -36,7 +37,7 @@ func main() {
 				}
 			}
 
-			return buildPackage(payloadDir, outDir, name, version, arch, ohosAPI, depends)
+			return buildPackage(payloadDir, outDir, name, version, arch, ohosAPI, depends, !noArchLibIsolation)
 		},
 	}
 
@@ -47,6 +48,7 @@ func main() {
 	root.Flags().StringVarP(&name, "name", "n", "", "package name (required)")
 	root.Flags().StringVarP(&version, "version", "v", "", "package version (required)")
 	root.Flags().StringArrayVar(&rawDepends, "depends", nil, "dependency (can be repeated). Examples: \"libz>=1.2.11\", \"openssl\", \"libfoo==1.0.0\"")
+	root.Flags().BoolVar(&noArchLibIsolation, "no-archlib-isolation", false, "use architecture-dependent library isolation at packaging time (default FALSE)")
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -54,7 +56,7 @@ func main() {
 	}
 }
 
-func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps []string) error {
+func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps []string, archLibIsolation bool) error {
 	if _, err := os.Stat(payloadDir); err != nil {
 		return err
 	}
@@ -93,7 +95,7 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	manifestPath := filepath.Join(outDir, manifestName)
 
 	// validate payloadDir
-	if err := checkPayloadDirTree(payloadDir, arch); err != nil {
+	if err := checkPayloadDirTree(payloadDir, arch, archLibIsolation); err != nil {
 		return err
 	}
 
@@ -133,7 +135,7 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	return nil
 }
 
-func checkPayloadDirTree(payloadDir, arch string) error {
+func checkPayloadDirTree(payloadDir, arch string, archLibIsolation bool) error {
 
 	archIndepLibDir := filepath.Join(payloadDir, "lib")
 	archDepLibDirRelPath, archErr := common.GetOhosArchDepLibDirRelPath(arch)
@@ -159,10 +161,16 @@ func checkPayloadDirTree(payloadDir, arch string) error {
 			}
 			filename := entry.Name()
 			if common.IsArchDependentLib(filepath.Join(archIndepLibDir, filename)) {
-				return fmt.Errorf(
-					"architecture-specific library files were incorrectly compiled and installed in an architecture-independent directory," +
-						" which will cause architecture conflicts when users install the library to OHOS SDK (especially for cmake project). " +
-						"Please check the --libdir parameter used during compilation")
+				msg := "architecture-specific library files were compiled and installed in an architecture-independent directory," +
+					" which will cause architecture conflicts when users install the library to OHOS SDK (especially for cmake project). "
+				if archLibIsolation {
+					return fmt.Errorf(
+						"%s This behavior is disabled by default. Please check the --libdir parameter used during compilation if this is not what you want. "+
+							"Otherwise, rerun with --no-archlib-isolation", msg)
+				} else {
+					fmt.Println("WARN: " + msg)
+				}
+				break
 			}
 		}
 		// not recursive exception: arch-dependent libraries with its own directory (in arch-independent lib dir) is fine. Like python
