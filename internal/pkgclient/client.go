@@ -301,6 +301,12 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 		dstArchLibDir := filepath.Join(prefix, archDepRelPath)
 		fmt.Printf("Patching libraries of package '%s'\n", name)
 		c.patchLibFiles(dstArchLibDir, prefix)
+		// patch shared files like xorg libraries
+		shareDir := filepath.Join(prefix, common.GetOhosSharedDirRelPath())
+		if common.IsDirExists(shareDir) {
+			// try to patch
+			c.patchSharedFiles(shareDir, prefix)
+		}
 
 		// executing script attachments
 		if common.IsDirExists(tmpDir) {
@@ -401,7 +407,7 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 	// use multiline regex anchors to replace full lines:
 	rePrefix := regexp.MustCompile(`(?m)^prefix=.*`)
 	reLibdirPc := regexp.MustCompile(`(?m)^libdir=.*`)
-	reIncludedir := regexp.MustCompile(`(?m)^(includedir=).*(/include/.*)$`)
+	reIncludedir := regexp.MustCompile(`(?m)^(includedir=).*(/include.*)$`)
 	for _, pc := range pcFiles {
 		info, statErr := os.Stat(pc)
 		if statErr != nil {
@@ -440,6 +446,11 @@ func (c *Client) patchLibFiles(dstArchLibDir, installPrefix string) error {
 		return fmt.Errorf("some operations failed while patching libraries:\n%s", strings.Join(errors, "\n"))
 	}
 	return nil
+}
+
+// patch files (*.pc) in share/ directory like xorg libraries
+func (c *Client) patchSharedFiles(shareLibDir, installPrefix string) error {
+	return c.patchLibFiles(shareLibDir, installPrefix)
 }
 
 // ResolveDependencies takes initial requested package names (each string may be a simple name)

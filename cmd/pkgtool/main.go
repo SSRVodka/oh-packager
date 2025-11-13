@@ -161,7 +161,7 @@ func checkPayloadDirTree(payloadDir, arch string) error {
 			if common.IsArchDependentLib(filepath.Join(archIndepLibDir, filename)) {
 				return fmt.Errorf(
 					"architecture-specific library files were incorrectly compiled and installed in an architecture-independent directory," +
-						" which will cause architecture conflicts when users install the library to OHOS SDK (especially for cmake project)." +
+						" which will cause architecture conflicts when users install the library to OHOS SDK (especially for cmake project). " +
 						"Please check the --libdir parameter used during compilation")
 			}
 		}

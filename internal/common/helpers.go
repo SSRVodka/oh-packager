@@ -57,6 +57,10 @@ func GetOhosArchDepLibDirRelPath(arch string) (string, error) {
 	return "lib/" + arch + "-linux-ohos", err
 }
 
+func GetOhosSharedDirRelPath() string {
+	return "share"
+}
+
 func GetInvalidPkgNameCharsInStr() string {
 	return ">< =&|;,"
 }
