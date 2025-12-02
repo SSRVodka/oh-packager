@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/SSRVodka/oh-packager/internal/common"
 	"github.com/SSRVodka/oh-packager/internal/pkgclient"
@@ -86,6 +87,59 @@ func main() {
 	}
 	listCmd.Flags().StringVar(&archFlag, "arch", "", "architecture (default auto-detected)")
 
+	var tgtPrefix, newPrefix string
+	patchCmd := &cobra.Command{
+		Use:   "patch <prefix> <new_prefix>",
+		Short: "Patch target libraries with new prefix",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfgFile := common.DefaultConfigPath()
+			cfg, err := common.LoadConfig(cfgFile)
+			if err != nil {
+				fmt.Printf("failed to load client config: %+v\n", err)
+				return nil
+			}
+			cl := pkgclient.NewClient(cfg)
+			tgtPrefix = args[0]
+			newPrefix = args[1]
+
+			// do patching
+			tgtPrefix, err = filepath.Abs(tgtPrefix)
+			if err != nil {
+				return err
+			}
+			if !common.IsDirExists(tgtPrefix) {
+				return fmt.Errorf("specific prefix not found: %s", tgtPrefix)
+			}
+			archDepRelPath, archErr := common.GetOhosArchDepLibDirRelPath(cfg.Arch)
+			if archErr != nil {
+				return fmt.Errorf("archError when patching (%v). Please reconfigure your arch using 'config'", archErr)
+			}
+			tgtArchLibDir := filepath.Join(tgtPrefix, archDepRelPath)
+			newArchLibDir := filepath.Join(newPrefix, archDepRelPath)
+			tgtShareDir := filepath.Join(tgtPrefix, common.GetOhosSharedDirRelPath())
+			newShareDir := filepath.Join(newPrefix, common.GetOhosSharedDirRelPath())
+			tgtArchIndepLibDir := filepath.Join(tgtPrefix, common.GetOhosArchIndepLibDirRelPath())
+			newArchIndepLibDir := filepath.Join(newPrefix, common.GetOhosArchIndepLibDirRelPath())
+			// patch arch-dep libs
+			err = cl.PatchLibFiles(tgtArchLibDir, newArchLibDir, newPrefix)
+			if err != nil {
+				return fmt.Errorf("error while patching arch-dep libs: %v", err)
+			}
+			// patch shares libs
+			err = cl.PatchLibFiles(tgtShareDir, newShareDir, newPrefix)
+			if err != nil {
+				return fmt.Errorf("error while shared arch-dep libs: %v", err)
+			}
+			// patch irregular arch-dep libs
+			err = cl.PatchLibFiles(tgtArchIndepLibDir, newArchIndepLibDir, newPrefix)
+			if err != nil {
+				return fmt.Errorf("error while patching irregular arch-dep libs: %v", err)
+			}
+			return nil
+		},
+	}
+
 	// INSTALL
 	var prefix string
 	var noConfirm bool
@@ -144,7 +198,7 @@ func main() {
 
 	// uninstall not supported for now
 	// root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
-	root.AddCommand(cfgCmd, listCmd, installCmd)
+	root.AddCommand(cfgCmd, listCmd, installCmd, patchCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
