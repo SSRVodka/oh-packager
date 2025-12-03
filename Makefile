@@ -1,6 +1,6 @@
 GO=go
 
-PROJECT_NAME=oh-packager
+PROJECT_NAME=ohloha
 
 OUTPUT_DIR := build
 BIN_DIR := ${OUTPUT_DIR}/bin
@@ -14,17 +14,17 @@ CMD_DIR := cmd
 GCFLAGS=-N -l
 
 
-all: oh-pkgtool oh-pkgserver oh-pkgmgr
+all: ohla-tool ohla-server ohla
 
-oh-pkgtool:
+ohla-tool:
 	@mkdir -p $(BIN_DIR)
 	${GO} build -gcflags "${GCFLAGS}" -o $(BIN_DIR)/$@ $(CMD_DIR)/pkgtool/main.go
 
-oh-pkgserver:
+ohla-server:
 	@mkdir -p $(BIN_DIR)
 	${GO} build -gcflags "${GCFLAGS}" -o $(BIN_DIR)/$@ $(CMD_DIR)/pkgserver/main.go
 
-oh-pkgmgr:
+ohla:
 	@mkdir -p $(BIN_DIR)
 	${GO} build -gcflags "${GCFLAGS}" -o $(BIN_DIR)/$@ $(CMD_DIR)/pkgmgr/main.go
 
