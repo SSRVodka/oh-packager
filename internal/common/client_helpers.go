@@ -28,12 +28,12 @@ func GetInstallExcluded() []string {
 func GetInstallComponents() []string {
 	return []string{"include", "lib", "share", "bin", "sbin",
 		// Qt capabiliteis
-		"doc", "mkspec", "openharmony", "plugins", "qml", "translations"}
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 }
 
 func IsOptionalInstallComponent(component string) bool {
 	opts := []string{"sbin", "share", "bin",
-		"doc", "mkspec", "openharmony", "plugins", "qml", "translations"}
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 	for _, opt := range opts {
 		if opt == component {
 			return true
