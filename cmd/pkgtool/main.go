@@ -100,8 +100,8 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	}
 
 	// check script attachment
-	postInstScriptPath := filepath.Join(payloadDir, common.GetPostInstScriptName())
-	if common.IsFileExists(postInstScriptPath) {
+	_, found := common.GetPostInstScriptPath(payloadDir)
+	if found {
 		fmt.Println("NOTE: post-installation script detected")
 	}
 

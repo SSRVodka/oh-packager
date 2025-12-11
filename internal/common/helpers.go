@@ -73,8 +73,17 @@ func GetDepsSepCharsInStr() string {
 	return ",;&|"
 }
 
-func GetPostInstScriptName() string {
-	return "postinst"
+// @return (script full path, isFound)
+func GetPostInstScriptPath(scriptDir string) (string, bool) {
+	if IsDirExists(scriptDir) {
+		for _, name := range []string{"postinst", "POSTINST", "PostInst"} {
+			path := filepath.Join(scriptDir, name)
+			if IsFileExists(path) {
+				return path, true
+			}
+		}
+	}
+	return "", false
 }
 
 func IsArchDepLibInArchIndepDir(payloadDir string) (bool, error) {

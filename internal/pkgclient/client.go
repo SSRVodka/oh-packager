@@ -342,8 +342,8 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 
 		// executing script attachments
 		if common.IsDirExists(tmpDir) {
-			postInstScriptPath := filepath.Join(tmpDir, common.GetPostInstScriptName())
-			if common.IsFileExists(postInstScriptPath) {
+			postInstScriptPath, found := common.GetPostInstScriptPath(tmpDir)
+			if found {
 				// execute it with install prefix
 				fmt.Printf("Executing post-installation script...\n")
 				outStr, exeErr := common.ExecuteShell(postInstScriptPath, prefix)
