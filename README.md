@@ -6,6 +6,21 @@ A simple system-level package management tool for the OpenHarmony platform, offe
 
 ### Usage
 
+Clone this repository:
+
+```bash
+git clone --recurse-submodules https://github.com/SSRVodka/oh-packager ohloha
+cd ohloha
+```
+
+Build with Go:
+
+```bash
+make
+```
+
+Now you get binaries `ohla`  (client),  `ohla-server` (server),  `ohla-tool`  (tool)  in directory `build/bin`;
+
 Use `--help` for more details.
 
 
@@ -35,13 +50,7 @@ ohla-server deploy ./console_bridge-0.0.1-aarch64-api15.pkg ./console_bridge-0.0
 Configure your client first:
 
 ```shell
-ohla -a aarch64 -d <your sdk directory> -s <repository URL>
-```
-
-For example you can use my repo:
-
-```shell
-ohla -a aarch64 -d <your sdk directory> -s https://raw.githubusercontent.com/SSRVodka/oh_pkg_repo/main
+ohla config -a aarch64 -d <your sdk directory> -s <repository URL>
 ```
 
 
@@ -66,3 +75,21 @@ Install the package to OpenHarmony SDK:
 ```shell
 ohla add console_bridge
 ```
+
+Even cross compiling packages:
+
+```bash
+# set SRC_REPO to the location of ohloha_pkgs
+SRC_REPO=$(pwd)/ohloha_pkgs
+# generate version info
+$SRC_REPO/gen-versions.sh
+
+# configure the client
+ohla config -a aarch64 -d <your sdk directory> -s <repository URL> --pkg-src-repo $SRC_REPO
+
+# now cross compile it!
+ohla xcompile --arch aarch64 python3
+```
+
+You also can learn to use this package manager by following [this script](./scripts/build_all_and_install2sdk.sh).
+
