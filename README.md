@@ -1,4 +1,4 @@
-## OH Packager
+## ohloha
 
 A simple system-level package management tool for the OpenHarmony platform, offering functionality to build system-level package repository (for hosting packages), package system-level libraries, install them into SDKs, or install them into specified directories. This facilitates developers' access to official system-level libraries not integrated into OHOS during the development phase.
 
@@ -14,19 +14,19 @@ Use `--help` for more details.
 Package a compiled library:
 
 ```shell
-oh-pkgtool -a aarch64 --api 15 -n console_bridge -i ./compiled_lib -v 0.0.1
+ohla-tool -a aarch64 --api 15 -n console_bridge -i ./compiled_lib -v 0.0.1
 ```
 
 Create a hosting repository:
 
 ```shell
-oh-pkgserver init --repo ./repo
+ohla-server init --repo ./repo
 ```
 
 Deploy a package to the repository:
 
 ```shell
-oh-pkgserver deploy ./console_bridge-0.0.1-aarch64-api15.pkg ./console_bridge-0.0.1-aarch64-api15.json --repo ./repo
+ohla-server deploy ./console_bridge-0.0.1-aarch64-api15.pkg ./console_bridge-0.0.1-aarch64-api15.json --repo ./repo
 ```
 
 
@@ -35,20 +35,20 @@ oh-pkgserver deploy ./console_bridge-0.0.1-aarch64-api15.pkg ./console_bridge-0.
 Configure your client first:
 
 ```shell
-oh-pkgmgr -a aarch64 -d <your sdk directory> -s <repository URL>
+ohla -a aarch64 -d <your sdk directory> -s <repository URL>
 ```
 
 For example you can use my repo:
 
 ```shell
-oh-pkgmgr -a aarch64 -d <your sdk directory> -s https://raw.githubusercontent.com/SSRVodka/oh_pkg_repo/main
+ohla -a aarch64 -d <your sdk directory> -s https://raw.githubusercontent.com/SSRVodka/oh_pkg_repo/main
 ```
 
 
 Check package list on the repository:
 
 ```shell
-oh-pkgmgr list
+ohla list
 ```
 
 > [!WARNING]
@@ -58,11 +58,11 @@ oh-pkgmgr list
 Install the package from the repository:
 
 ```shell
-oh-pkgmgr add console_bridge --prefix ./dist
+ohla add console_bridge --prefix ./dist
 ```
 
 Install the package to OpenHarmony SDK:
 
 ```shell
-oh-pkgmgr add console_bridge
+ohla add console_bridge
 ```

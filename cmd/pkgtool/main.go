@@ -19,7 +19,7 @@ func main() {
 	var noArchLibIsolation bool
 
 	root := &cobra.Command{
-		Use:   "oh-pkgtool",
+		Use:   "ohla-tool",
 		Short: "Create a package (.pkg) and manifest from a payload directory",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if payloadDir == "" || name == "" || version == "" || arch == "" || ohosAPI == "" {

@@ -180,7 +180,8 @@ func (c *Client) extract(pkgPath, pkgName, pkgVersion, prefix string) (string, e
 // @return (finalDir, error)
 //
 // @note prefix must be an absolute path
-func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool) error {
+// @note noResolve == true will disable network. You can only use local file in this mode
+func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool, noResolve bool) error {
 
 	var localSdkInfo *meta.OhosSdkInfo
 	var loadSdkErr error
@@ -238,12 +239,30 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 		pkgs = append(pkgs, pkgName)
 	}
 
-	// Resolve dependencies (returns chosen versions map)
-	// assert lastArch != ""
-	fmt.Printf("Resolving dependencies...\n")
-	chosen, err := c.ResolveDependencies(pkgs, lastArch)
-	if err != nil {
-		return err
+	chosen := map[string]meta.IndexEntry{}
+	if noResolve {
+		for name, pth := range name2pkgPath {
+			pkgName, ver, arch, api, parseErr := common.ParsePkgNameFromPath(pth)
+			if parseErr != nil {
+				return parseErr
+			}
+			chosen[name] = meta.IndexEntry{
+				Name:    pkgName,
+				Version: ver,
+				Arch:    arch,
+				OhosApi: api,
+				// ignore dependencies
+			}
+		}
+	} else {
+		// Resolve dependencies (returns chosen versions map)
+		// assert lastArch != ""
+		fmt.Printf("Resolving dependencies...\n")
+		var resolveErr error
+		chosen, resolveErr = c.ResolveDependencies(pkgs, lastArch)
+		if resolveErr != nil {
+			return resolveErr
+		}
 	}
 
 	// ask for confirmation
@@ -603,7 +622,7 @@ func (c *Client) ResolveDependencies(requested []string, arch string) (map[strin
 }
 
 // Install downloads and installs the named package into OHOS sdk
-func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string, noConfirm bool) error {
+func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string, noConfirm bool, noResolve bool) error {
 	if c.Config.OhosSdk == "" {
 		return errors.New("OHOS SDK path not configured (use --help for more info)")
 	}
@@ -611,14 +630,14 @@ func (c *Client) InstallToSdk(pkgNameOrLocalFileList []string, noConfirm bool) e
 	if !common.IsDirExists(prefix) {
 		return fmt.Errorf("invalid OHOS sdk directory tree: directory '%s' not exists", prefix)
 	}
-	return c.install(pkgNameOrLocalFileList, prefix, noConfirm)
+	return c.install(pkgNameOrLocalFileList, prefix, noConfirm, noResolve)
 }
 
 // Install downloads and installs the named package into prefix.
 // @note prefix must be an absolute path
-func (c *Client) Install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool) error {
+func (c *Client) Install(pkgNameOrLocalFileList []string, prefix string, noConfirm bool, noResolve bool) error {
 
-	return c.install(pkgNameOrLocalFileList, prefix, noConfirm)
+	return c.install(pkgNameOrLocalFileList, prefix, noConfirm, noResolve)
 }
 
 // Uninstall removes installed package from prefix.

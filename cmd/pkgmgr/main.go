@@ -11,9 +11,9 @@ import (
 )
 
 func main() {
-	var rootURL, arch, channel, ohosSdkDir, ohosSdkDirAbs string
+	var rootURL, arch, channel, ohosSdkDir, ohosSdkDirAbs, pkgSrcRepoDir string
 	root := &cobra.Command{
-		Use:   "oh-pkgmgr",
+		Use:   "ohla",
 		Short: "Client for the package repo (list, install, uninstall, config)",
 	}
 
@@ -52,6 +52,12 @@ func main() {
 			if channel != "" {
 				c.Channel = channel
 			}
+			if pkgSrcRepoDir != "" {
+				c.PkgSrcRepo, absErr = common.GetAbsolutePath(pkgSrcRepoDir)
+				if absErr != nil {
+					return fmt.Errorf("invalid path '%s'", pkgSrcRepoDir)
+				}
+			}
 			if err := common.SaveConfig(cfg, c); err != nil {
 				return err
 			}
@@ -64,6 +70,7 @@ func main() {
 	cfgCmd.Flags().StringVarP(&ohosSdkDir, "ohos-sdk", "d", "", "Set directory of local OHOS SDK (e.g. /home/xhw/ohos-robot-toolchain/linux)")
 	cfgCmd.Flags().StringVarP(&arch, "arch", "a", "", "Set default architecture (e.g. x86_64,arm,aarch64)")
 	cfgCmd.Flags().StringVarP(&channel, "channel", "c", "", "Set default channel (OPTIONAL, e.g. stable)")
+	cfgCmd.Flags().StringVar(&pkgSrcRepoDir, "pkg-src-repo", "", "Set the directory of the package source repository for cross compiling (OPTIONAL)")
 
 	// LIST
 	var archFlag string
@@ -142,7 +149,7 @@ func main() {
 
 	// INSTALL
 	var prefix string
-	var noConfirm bool
+	var noConfirm, noResolve bool
 	installCmd := &cobra.Command{
 		Use:   "add <package> [package...]",
 		Short: "Install one or more packages to prefix (irreversible). Empty prefix indicates installing to OHOS sdk",
@@ -156,17 +163,18 @@ func main() {
 			}
 			cl := pkgclient.NewClient(cfg)
 			if prefix == "" {
-				return cl.InstallToSdk(args, noConfirm)
+				return cl.InstallToSdk(args, noConfirm, noResolve)
 			}
 			var prefixErr error
 			prefix, prefixErr = common.GetAbsolutePath(prefix)
 			if prefixErr != nil {
 				return prefixErr
 			}
-			return cl.Install(args, prefix, noConfirm)
+			return cl.Install(args, prefix, noConfirm, noResolve)
 		},
 	}
 	installCmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "install without interaction/prompt")
+	installCmd.Flags().BoolVar(&noResolve, "no-resolve", false, "install without resolving dependencies. WARN: this will break the dependencies!!! And ONLY local file will be accepted in this mode")
 	installCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required for non OHOS sdk installation)")
 
 	// UNINSTALL
@@ -196,9 +204,32 @@ func main() {
 	}
 	uninstallCmd.Flags().StringVar(&prefix, "prefix", "", "target install prefix (required)")
 
+	// XCOMPILE
+	var xcompileArch string
+	xcompileCmd := &cobra.Command{
+		Use:   "xcompile <package> [package...]",
+		Short: "Build packages from source in topological order",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfgFile := common.DefaultConfigPath()
+			cfg, err := common.LoadConfig(cfgFile)
+			if err != nil {
+				fmt.Printf("failed to load client config: %+v\n", err)
+				return nil
+			}
+			cl := pkgclient.NewClient(cfg)
+			arch := xcompileArch
+			if arch == "" {
+				arch = common.DefaultArch()
+			}
+			return cl.XCompile(args, arch)
+		},
+	}
+	xcompileCmd.Flags().StringVar(&xcompileArch, "arch", "", "target architecture (default from config)")
+
 	// uninstall not supported for now
 	// root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
-	root.AddCommand(cfgCmd, listCmd, installCmd, patchCmd)
+	root.AddCommand(cfgCmd, listCmd, installCmd, patchCmd, xcompileCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

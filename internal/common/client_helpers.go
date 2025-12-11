@@ -101,10 +101,11 @@ func UserConfigDir() string {
 // DefaultConfig returns defaults.
 func DefaultConfig() *config.Config {
 	return &config.Config{
-		RootURL: "",
-		Arch:    "",
-		OhosSdk: "",
-		Channel: "stable",
+		RootURL:    "",
+		Arch:       "",
+		OhosSdk:    "",
+		Channel:    "stable",
+		PkgSrcRepo: "",
 	}
 }
 

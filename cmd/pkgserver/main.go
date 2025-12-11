@@ -12,7 +12,7 @@ func main() {
 	var basePath string
 
 	root := &cobra.Command{
-		Use:   "oh-pkgserver",
+		Use:   "ohla-server",
 		Short: "Repository manager for server-side package directory",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if basePath == "" {

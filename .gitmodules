@@ -1,0 +1,3 @@
+[submodule "ohloha_pkgs"]
+	path = ohloha_pkgs
+	url = git@github.com:SSRVodka/oh-edu-pkgs.git

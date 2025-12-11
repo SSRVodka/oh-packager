@@ -171,6 +171,18 @@ func ExecuteShell(scriptPath string, args ...string) (string, error) {
 	return string(output), nil
 }
 
+func ExecuteShellRealTime(scriptPath string, args ...string) error {
+	cmd := exec.Command(scriptPath, args...)
+	// bind the output stream of the shell to the current process
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// block
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("error while executing shell '%s': %v", scriptPath, err)
+	}
+	return nil
+}
+
 // ASSUME: pkgVersion & pkgArch & pkgAPI doesn't contains '-'
 
 func GenPkgFileName(pkgName, pkgVersion, pkgArch, pkgAPI string) string {
@@ -544,4 +556,40 @@ func sliceToSet[T int | string](slice []T) map[T]struct{} {
 		m[s] = struct{}{}
 	}
 	return m
+}
+
+// ParseVersionFile parses a VERSION file and returns all package infos
+func ParseVersionFile(path string) ([]*meta.PackageInfo, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read VERSION file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var packages []*meta.PackageInfo
+
+	for lineNum, line := range lines {
+		info, err := meta.ParseVersionLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNum+1, err)
+		}
+		if info != nil {
+			packages = append(packages, info)
+		}
+	}
+
+	return packages, nil
+}
+
+// NormalizeDependency extracts package name from dependency constraint
+// e.g., "pkg1>=2.3" -> "pkg1"; "pkg2" -> "pkg2"
+func NormalizeDependency(dep string) string {
+	dep = strings.TrimSpace(dep)
+	// Find where operator starts
+	for i, r := range dep {
+		if r == '>' || r == '<' || r == '=' {
+			return dep[:i]
+		}
+	}
+	return dep
 }
