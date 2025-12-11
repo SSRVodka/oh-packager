@@ -1,0 +1,3 @@
+[submodule "ohloha_pkgs"]
+	path = ohloha_pkgs
+	url = git@gitcode.com:openharmony-robot/tools_ohloha_pkgs.git

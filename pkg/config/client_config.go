@@ -7,4 +7,7 @@ type Config struct {
 	// absolute path
 	OhosSdk string `json:"ohos_sdk"`
 	Channel string `json:"channel"`
+
+	// absolute path for xcompile
+	PkgSrcRepo string `json:"pkg_src_repo"`
 }

@@ -19,7 +19,7 @@ func main() {
 	var noArchLibIsolation bool
 
 	root := &cobra.Command{
-		Use:   "oh-pkgtool",
+		Use:   "ohla-tool",
 		Short: "Create a package (.pkg) and manifest from a payload directory",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if payloadDir == "" || name == "" || version == "" || arch == "" || ohosAPI == "" {
@@ -100,8 +100,8 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	}
 
 	// check script attachment
-	postInstScriptPath := filepath.Join(payloadDir, common.GetPostInstScriptName())
-	if common.IsFileExists(postInstScriptPath) {
+	_, found := common.GetPostInstScriptPath(payloadDir)
+	if found {
 		fmt.Println("NOTE: post-installation script detected")
 	}
 

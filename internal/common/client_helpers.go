@@ -28,12 +28,12 @@ func GetInstallExcluded() []string {
 func GetInstallComponents() []string {
 	return []string{"include", "lib", "share", "bin", "sbin",
 		// Qt capabiliteis
-		"doc", "mkspec", "openharmony", "plugins", "qml", "translations"}
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 }
 
 func IsOptionalInstallComponent(component string) bool {
 	opts := []string{"sbin", "share", "bin",
-		"doc", "mkspec", "openharmony", "plugins", "qml", "translations"}
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 	for _, opt := range opts {
 		if opt == component {
 			return true
@@ -101,10 +101,11 @@ func UserConfigDir() string {
 // DefaultConfig returns defaults.
 func DefaultConfig() *config.Config {
 	return &config.Config{
-		RootURL: "",
-		Arch:    "",
-		OhosSdk: "",
-		Channel: "stable",
+		RootURL:    "",
+		Arch:       "",
+		OhosSdk:    "",
+		Channel:    "stable",
+		PkgSrcRepo: "",
 	}
 }
 
