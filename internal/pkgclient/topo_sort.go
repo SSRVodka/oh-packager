@@ -90,10 +90,120 @@ func TopologicalSort(packages []*meta.PackageInfo) ([]string, error) {
 
 	// Check for cycles
 	if len(result) != len(packages) {
-		return nil, fmt.Errorf("dependency cycle detected")
+		// Find and report the cycle
+		cycle := findCycle(graph, inDegree)
+		if len(cycle) > 0 {
+			return nil, fmt.Errorf("circular dependency detected:\n%s", formatCycle(cycle, graph))
+		}
+		return nil, fmt.Errorf("dependency cycle detected (unable to determine exact path)")
 	}
 
 	return result, nil
+}
+
+// findCycle detects a cycle in the dependency graph using DFS
+// Returns a slice representing the cycle path
+func findCycle(graph map[string]*BuildNode, inDegree map[string]int) []string {
+	// Only consider nodes that are part of the cycle (inDegree > 0)
+	remaining := make(map[string]bool)
+	for name, degree := range inDegree {
+		if degree > 0 {
+			remaining[name] = true
+		}
+	}
+
+	if len(remaining) == 0 {
+		return nil
+	}
+
+	// Use DFS to find a cycle
+	visited := make(map[string]bool)
+	recStack := make(map[string]bool)
+	parent := make(map[string]string)
+
+	var dfs func(node string) []string
+	dfs = func(node string) []string {
+		visited[node] = true
+		recStack[node] = true
+
+		for _, dep := range graph[node].Dependencies {
+			// Only follow edges to nodes that are part of remaining set
+			if !remaining[dep] {
+				continue
+			}
+
+			if !visited[dep] {
+				parent[dep] = node
+				if cycle := dfs(dep); cycle != nil {
+					return cycle
+				}
+			} else if recStack[dep] {
+				// Found a cycle, reconstruct it
+				cycle := []string{dep}
+				current := node
+				for current != dep {
+					cycle = append(cycle, current)
+					current = parent[current]
+				}
+				cycle = append(cycle, dep) // Complete the cycle
+
+				// Reverse to get correct order
+				for i, j := 0, len(cycle)-1; i < j; i, j = i+1, j-1 {
+					cycle[i], cycle[j] = cycle[j], cycle[i]
+				}
+				return cycle
+			}
+		}
+
+		recStack[node] = false
+		return nil
+	}
+
+	// Start DFS from any remaining node
+	for name := range remaining {
+		if !visited[name] {
+			if cycle := dfs(name); cycle != nil {
+				return cycle
+			}
+		}
+	}
+
+	return nil
+}
+
+// formatCycle formats the cycle path into a readable error message
+func formatCycle(cycle []string, graph map[string]*BuildNode) string {
+	var sb strings.Builder
+
+	for i := 0; i < len(cycle)-1; i++ {
+		current := cycle[i]
+		next := cycle[i+1]
+
+		pkg := graph[current].Info
+
+		sb.WriteString(fmt.Sprintf("  %s (%s)\n", current, pkg.Version))
+
+		// Determine which type of dependency causes the edge
+		var depType []string
+		for _, dep := range pkg.Depends {
+			if common.NormalizeDependency(dep) == next {
+				depType = append(depType, fmt.Sprintf("runtime: %s", dep))
+			}
+		}
+		for _, dep := range pkg.BuildDepends {
+			if common.NormalizeDependency(dep) == next {
+				depType = append(depType, fmt.Sprintf("build: %s", dep))
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("    └─> depends on [%s]\n", strings.Join(depType, ", ")))
+	}
+
+	// Add the last node that completes the cycle
+	lastPkg := graph[cycle[len(cycle)-1]].Info
+	sb.WriteString(fmt.Sprintf("  %s (%s) [cycle closes here]\n", cycle[len(cycle)-1], lastPkg.Version))
+
+	return sb.String()
 }
 
 // PrintDependencyGraph prints the dependency graph in a readable format
