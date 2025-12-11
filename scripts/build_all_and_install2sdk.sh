@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 cd $(dirname $(readlink -f $0))
 
-SRC_REPO=$(pwd)/../tools_ohloha_pkgs
+SRC_REPO=$(pwd)/../ohloha_pkgs
 
 if [ -z "${OHOS_SDK:-}" ]; then
     echo "ERROR: OHOS_SDK not set. e.g., export OHOS_SDK=/xxx/linux"
