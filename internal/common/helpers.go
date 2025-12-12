@@ -11,9 +11,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SSRVodka/oh-packager/pkg/meta"
@@ -173,13 +175,70 @@ func ExecuteShell(scriptPath string, args ...string) (string, error) {
 
 func ExecuteShellRealTime(scriptPath string, args ...string) error {
 	cmd := exec.Command(scriptPath, args...)
-	// bind the output stream of the shell to the current process
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	// block
-	if err := cmd.Run(); err != nil {
+	cmd.Stdin = os.Stdin // give child access to terminal if it needs it
+
+	// Don't create a new process group — let child share the parent's foreground group
+	// But set Pdeathsig so child is killed if parent dies unexpectedly (Linux only).
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGTERM, // Linux: child receives SIGTERM if parent dies
+	}
+
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("error while executing shell '%s': %v", scriptPath, err)
 	}
+
+	// Ensure child is terminated on function exit as a last resort.
+	defer func() {
+		if cmd.Process == nil {
+			return
+		}
+		// Try graceful termination first
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		// give it a short time to exit
+		time.Sleep(200 * time.Millisecond)
+		if err := cmd.Process.Signal(syscall.Signal(0)); err == nil {
+			// still alive -> force kill
+			_ = cmd.Process.Kill()
+		}
+	}()
+
+	// Setup signal handling in parent: forward signals to child
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case sig := <-sigChan:
+		// forward the same signal to the child so it can cleanup
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(sig)
+		}
+		// wait for child to exit (with timeout); escalate if needed
+		select {
+		case err := <-done:
+			if err != nil {
+				return fmt.Errorf("child exited with error after signal %v: %w", sig, err)
+			}
+			return fmt.Errorf("interrupted")
+		case <-time.After(3 * time.Second):
+			// still alive -> force kill process
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-done
+			return fmt.Errorf("interrupted (child killed)")
+		}
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("error while executing shell '%s': %v", scriptPath, err)
+		}
+	}
+
 	return nil
 }
 
