@@ -46,7 +46,8 @@ $PKG_MGR \
     SuiteSparse gflags glog gtest ceres-solver zstd zeromq libexpat libpng g2o geographiclib tinyxml2 \
     oneTBB pcre2 swig YDLidar-SDK llama.cpp rsync lz4 octomap xtl xtensor xsimd nanoflann nlohmann-json \
     llvm freetype fontconfig libdrm SPIRV-Headers SPIRV-Tools SPIRV-LLVM-Translator glslang xorg mesa glu \
-    ogre GraphicsMagick flann pcl bullet3 qt5
+    ogre GraphicsMagick flann pcl bullet3 qt5 \
+    grpc glew gdb vim openssh-portable
     
 OHOS_CPU=${OHOS_CPU} OHOS_ARCH=${OHOS_ARCH} $SRC_REPO/pkgs-deploy-all.sh
 
