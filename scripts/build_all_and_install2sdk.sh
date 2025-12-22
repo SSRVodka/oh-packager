@@ -47,7 +47,7 @@ $PKG_MGR \
     oneTBB pcre2 swig YDLidar-SDK llama.cpp rsync lz4 octomap xtl xtensor xsimd nanoflann nlohmann-json \
     llvm freetype fontconfig libdrm SPIRV-Headers SPIRV-Tools SPIRV-LLVM-Translator glslang xorg mesa glu \
     ogre GraphicsMagick flann pcl bullet3 qt5 \
-    grpc glew gdb vim openssh-portable
+    grpc glew glut gdb vim openssh-portable
     
 OHOS_CPU=${OHOS_CPU} OHOS_ARCH=${OHOS_ARCH} $SRC_REPO/pkgs-deploy-all.sh
 
@@ -61,5 +61,6 @@ while IFS= read -r -d '' file; do
     pkg_files+=("$pkg_path")
 done < <(find "$deploy_dir" -maxdepth 1 -name "*.json" -print0)
 
-# use --prefix to install to specific location
 $PKG_MGR add --no-resolve -y "${pkg_files[@]}"
+# use --prefix to install to specific location
+# $PKG_MGR add --no-resolve --prefix $(pwd)/out "${pkg_files[@]}"
