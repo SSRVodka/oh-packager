@@ -106,7 +106,7 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	}
 
 	// create tar.gz without libexec
-	if err := common.TarGzDir(payloadDir, pkgPath, []string{}, common.GetInstallExcluded()); err != nil {
+	if err := common.TarGzDir(payloadDir, pkgPath, []string{}, common.GetInstallExcluded(archLibIsolation)); err != nil {
 		return err
 	}
 	sum, err := common.ComputeSHA256(pkgPath)
@@ -182,8 +182,7 @@ func checkPayloadDirTree(payloadDir, arch string, archLibIsolation bool) error {
 		fmt.Println("WARN: libraries not found for this package")
 	}
 
-	// TODO: not support libexec for now
-	if common.IsDirExists(archLibexecDir) {
+	if common.IsDirExists(archLibexecDir) && archLibIsolation {
 		fmt.Println("WARN: executable libraries will be ignored in this package")
 	}
 

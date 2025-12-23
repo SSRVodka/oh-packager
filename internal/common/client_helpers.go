@@ -21,18 +21,22 @@ import (
 
 const DEFAULT_CONFIG_DIR string = "oh_pkgmgr"
 
-func GetInstallExcluded() []string {
-	return []string{"libexec"}
+func GetInstallExcluded(archLibIsolation bool) []string {
+	if archLibIsolation {
+		return []string{"libexec"}
+	} else {
+		return []string{}
+	}
 }
 
 func GetInstallComponents() []string {
-	return []string{"include", "lib", "share", "bin", "sbin",
+	return []string{"include", "lib", "share", "bin", "sbin", "etc", "libexec",
 		// Qt capabiliteis
 		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 }
 
 func IsOptionalInstallComponent(component string) bool {
-	opts := []string{"sbin", "share", "bin",
+	opts := []string{"sbin", "share", "bin", "etc", "libexec",
 		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
 	for _, opt := range opts {
 		if opt == component {
