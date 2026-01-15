@@ -31,13 +31,16 @@ func GetInstallExcluded(archLibIsolation bool) []string {
 
 func GetInstallComponents() []string {
 	return []string{"include", "lib", "share", "bin", "sbin", "etc", "libexec",
-		// Qt capabiliteis
-		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
+		// Qt capabilities
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations",
+		// OpenJDK like options
+		"local"}
 }
 
 func IsOptionalInstallComponent(component string) bool {
 	opts := []string{"sbin", "share", "bin", "etc", "libexec",
-		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations"}
+		"doc", "mkspecs", "openharmony", "plugins", "qml", "translations",
+		"local"}
 	for _, opt := range opts {
 		if opt == component {
 			return true

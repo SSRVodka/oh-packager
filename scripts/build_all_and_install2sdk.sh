@@ -47,7 +47,8 @@ $PKG_MGR \
     oneTBB pcre2 swig YDLidar-SDK llama.cpp rsync lz4 octomap xtl xtensor xsimd nanoflann nlohmann-json \
     llvm freetype fontconfig libdrm SPIRV-Headers SPIRV-Tools SPIRV-LLVM-Translator glslang xorg mesa glu \
     ogre GraphicsMagick flann pcl bullet3 qt5 \
-    grpc glew glut gdb vim openssh-portable
+    grpc glew glut gdb vim openssh-portable \
+    libpcap lua pixman cairo cups openjdk
     
 OHOS_CPU=${OHOS_CPU} OHOS_ARCH=${OHOS_ARCH} $SRC_REPO/pkgs-deploy-all.sh
 
@@ -62,5 +63,20 @@ while IFS= read -r -d '' file; do
 done < <(find "$deploy_dir" -maxdepth 1 -name "*.json" -print0)
 
 $PKG_MGR add --no-resolve -y "${pkg_files[@]}"
+
+# package the sdk
+pushd ${OHOS_SDK}/..
+tar -zcpvf ohos-sdk-18-linux-${OHOS_CPU}-$(date +"%Y%m%d").tar.gz $(basename ${OHOS_SDK})
+popd
+mv ${OHOS_SDK}/../ohos-sdk-18-linux-${OHOS_CPU}-*.tar.gz ${SRC_REPO}/..
+
 # use --prefix to install to specific location
-# $PKG_MGR add --no-resolve --prefix $(pwd)/out "${pkg_files[@]}"
+mkdir -p $(pwd)/out
+$PKG_MGR add --no-resolve -y --prefix $(pwd)/out "${pkg_files[@]}"
+
+# package sysdeps
+# add prebuilt pydeps
+wget -O pydeps.tar.gz https://github.com/SSRVodka/oh-edu-pkgs/releases/download/v0.0.2/pydeps-${OHOS_CPU}-20251229.tar.gz
+tar -zxpvf pydeps.tar.gz
+tar -zcpvf ohos-18-sysdeps-${OHOS_CPU}-$(date +"%Y%m%d").tar.gz out/
+mv ohos-18-sysdeps-${OHOS_CPU}-*.tar.gz ${SRC_REPO}/..
