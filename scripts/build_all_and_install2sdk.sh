@@ -62,7 +62,41 @@ while IFS= read -r -d '' file; do
     pkg_files+=("$pkg_path")
 done < <(find "$deploy_dir" -maxdepth 1 -name "*.json" -print0)
 
+# backup original SDK
+if [ "${OHOS_SDK:-}" = "/" ] || [ -z "${OHOS_SDK:-}" ]; then
+    echo "Error: Invalid or empty OHOS_SDK path: '${OHOS_SDK}'" >&2
+    exit 1
+fi
+if [ ! -d "${OHOS_SDK}" ]; then
+    echo "Error: SDK path does not exist: ${OHOS_SDK}" >&2
+    exit 1
+fi
+sdk_bak="${OHOS_SDK}-backup-$(date +"%Y%m%d")"
+if [ -e "${sdk_bak}" ]; then
+    echo "Error: Backup target already exists: ${sdk_bak}" >&2
+    exit 1
+fi
+restore_on_failure() {
+    local err_code=$?
+    echo "Error occurred (code: ${err_code}). Attempting recovery..." >&2
+    if [ ! -e "${OHOS_SDK}" ] && [ -d "${sdk_bak}" ]; then
+        echo "Restoring SDK from backup: ${sdk_bak} -> ${OHOS_SDK}" >&2
+        mv "${sdk_bak}" "${OHOS_SDK}"
+    fi
+    if [ -e "${OHOS_SDK}.rubbish" ]; then
+        echo "Cleaning up unexpected .rubbish directory" >&2
+        rm -rf "${OHOS_SDK}.rubbish"
+    fi
+    exit $err_code
+}
+trap restore_on_failure ERR
+echo "Backing up SDK to ${sdk_bak}..."
+cp -r "${OHOS_SDK}" "${sdk_bak}"
+
 $PKG_MGR add --no-resolve -y "${pkg_files[@]}"
+mv "${OHOS_SDK}" "${OHOS_SDK}.rubbish"
+mv "${sdk_bak}" "${OHOS_SDK}"
+rm -rf "${OHOS_SDK}.rubbish"
 
 # package the sdk
 pushd ${OHOS_SDK}/..
