@@ -208,7 +208,7 @@ func formatCycle(cycle []string, graph map[string]*BuildNode) string {
 
 // PrintDependencyGraph prints the dependency graph in a readable format
 func PrintDependencyGraph(packages []*meta.PackageInfo, order []string) {
-	fmt.Println("\n=== Dependency Graph (Topological Order) ===\n")
+	fmt.Print("\n=== Dependency Graph (Topological Order) ===\n\n")
 
 	// Create lookup map
 	pkgMap := make(map[string]*meta.PackageInfo)

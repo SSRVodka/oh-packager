@@ -617,7 +617,38 @@ func sliceToSet[T int | string](slice []T) map[T]struct{} {
 	return m
 }
 
-// ParseVersionFile parses a VERSION file and returns all package infos
+// ParsePackageIndexFile parses a PKG_INDEX.json file and returns all package infos.
+func ParsePackageIndexFile(path string) ([]*meta.PackageInfo, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read package index file: %w", err)
+	}
+
+	var packages []*meta.PackageInfo
+	if err := json.Unmarshal(content, &packages); err != nil {
+		return nil, fmt.Errorf("failed to parse package index JSON: %w", err)
+	}
+
+	for i, pkg := range packages {
+		if pkg == nil {
+			return nil, fmt.Errorf("package index entry %d is null", i)
+		}
+		if pkg.Name == "" {
+			return nil, fmt.Errorf("package index entry %d has empty name", i)
+		}
+		if pkg.Version == "" {
+			return nil, fmt.Errorf("package index entry %d (%s) has empty version", i, pkg.Name)
+		}
+		if pkg.BuildFile == "" {
+			return nil, fmt.Errorf("package index entry %d (%s) has empty build_file", i, pkg.Name)
+		}
+	}
+
+	return packages, nil
+}
+
+// ParseVersionFile parses a legacy VERSION file and returns all package infos.
+// Deprecated: use ParsePackageIndexFile with PKG_INDEX.json.
 func ParseVersionFile(path string) ([]*meta.PackageInfo, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {

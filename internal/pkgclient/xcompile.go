@@ -21,28 +21,25 @@ func (c *Client) XCompile(packageNames []string, arch string) error {
 
 	repo := c.Config.PkgSrcRepo
 
-	// generate VERSION file
-	genSh := filepath.Join(repo, "gen-versions.sh")
+	// Generate PKG_INDEX.json from BUILD metadata.
+	genSh := filepath.Join(repo, "gen-pkg-index.sh")
 	out, genErr := common.ExecuteShell(genSh)
 	if genErr != nil {
-		return fmt.Errorf("failed to generate VERSION metadata: %v; Output: %s", genErr, out)
+		return fmt.Errorf("failed to generate package index metadata: %v; Output: %s", genErr, out)
 	}
 
-	// Parse VERSION file from package source repository
-	versionFilePath := filepath.Join(repo, "VERSION")
-
-	// Check if VERSION file exists
-	if !common.IsFileExists(versionFilePath) {
-		return fmt.Errorf("VERSION file not found at %s. Please ensure package source repo is available", versionFilePath)
+	indexFilePath := filepath.Join(repo, "PKG_INDEX.json")
+	if !common.IsFileExists(indexFilePath) {
+		return fmt.Errorf("package index not found at %s. Please ensure package source repo is available", indexFilePath)
 	}
 
-	fmt.Println("Parsing VERSION file...")
-	allPackages, err := common.ParseVersionFile(versionFilePath)
+	fmt.Println("Parsing package index...")
+	allPackages, err := common.ParsePackageIndexFile(indexFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to parse VERSION file: %w", err)
+		return fmt.Errorf("failed to parse package index: %w", err)
 	}
 
-	fmt.Printf("Found %d packages in VERSION file\n", len(allPackages))
+	fmt.Printf("Found %d packages in package index\n", len(allPackages))
 
 	// Filter to requested packages and their dependencies
 	selectedPackages, err := c.selectPackagesWithDeps(allPackages, packageNames)
@@ -64,8 +61,16 @@ func (c *Client) XCompile(packageNames []string, arch string) error {
 
 	// Construct parameters for builder shell
 	builderParams := []string{fmt.Sprintf("--cpu=%s", arch)}
+	pkgByName := make(map[string]*meta.PackageInfo, len(selectedPackages))
+	for _, pkg := range selectedPackages {
+		pkgByName[pkg.Name] = pkg
+	}
 	for _, name := range buildOrder {
-		builderParams = append(builderParams, filepath.Join(repo, name, "BUILD"))
+		pkg := pkgByName[name]
+		if pkg == nil {
+			return fmt.Errorf("internal error: package %s missing from selected package map", name)
+		}
+		builderParams = append(builderParams, filepath.Join(repo, pkg.BuildFile))
 	}
 
 	// change working directory
@@ -101,7 +106,7 @@ func (c *Client) selectPackagesWithDeps(allPackages []*meta.PackageInfo, request
 
 		pkg, exists := pkgMap[name]
 		if !exists {
-			return fmt.Errorf("package not found in VERSION file: %s", name)
+			return fmt.Errorf("package not found in package index: %s", name)
 		}
 
 		selected[name] = pkg

@@ -51,13 +51,19 @@ type OhosSdkInfo struct {
 	ApiVersion string `json:"apiVersion"`
 }
 
-// pkgs VERSION
-// PkgSourceInfo represents the parsed information from VERSION file in pkgs patch repo
+// PackageInfo represents package metadata exported by ohloha_pkgs/PKG_INDEX.json.
 type PackageInfo struct {
-	Name         string
-	Version      string
-	Depends      []string
-	BuildDepends []string
+	Name         string   `json:"name"`
+	Version      string   `json:"version"`
+	BuildFile    string   `json:"build_file"`
+	Depends      []string `json:"deps"`
+	BuildDepends []string `json:"build_deps"`
+	SourceURL    string   `json:"source_url,omitempty"`
+	ReleaseURL   string   `json:"release_url,omitempty"`
+	License      string   `json:"license,omitempty"`
+	SupportArchs []string `json:"support_archs,omitempty"`
+	BuildType    string   `json:"build_type,omitempty"`
+	PatchFiles   []string `json:"patch_files,omitempty"`
 }
 
 // ParseVersionLine parses a single line from VERSION file
