@@ -29,9 +29,15 @@ type buildResult struct {
 }
 
 // XCompile builds packages from source in topological order.
-func (c *Client) XCompile(packageNames []string, arch string, jobs int) error {
+func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoing bool) error {
 	if c.Config.PkgSrcRepo == "" {
 		return fmt.Errorf("package source repository for cross compile not configured")
+	}
+	if c.Config.OhosSdk == "" {
+		return fmt.Errorf("OHOS SDK path not configured")
+	}
+	if _, err := common.LoadLocalSdkInfo(c.Config.OhosSdk); err != nil {
+		return err
 	}
 	if jobs < 1 {
 		return fmt.Errorf("jobs must be >= 1")
@@ -39,6 +45,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int) error {
 
 	fmt.Printf("Cross-compiling for architecture: %s\n", arch)
 	fmt.Printf("Build jobs: %d\n", jobs)
+	fmt.Printf("Keep going after failures: %t\n", keepGoing)
 	fmt.Printf("Requested packages: %s\n\n", strings.Join(packageNames, ", "))
 
 	repo := c.Config.PkgSrcRepo
@@ -92,7 +99,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int) error {
 		return chdirErr
 	}
 
-	if err := c.buildPackageDAG(repo, arch, jobs, selectedPackages, buildOrder, pkgByName); err != nil {
+	if err := c.buildPackageDAG(repo, c.Config.OhosSdk, arch, jobs, keepGoing, selectedPackages, buildOrder, pkgByName); err != nil {
 		return err
 	}
 
@@ -101,7 +108,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int) error {
 	return nil
 }
 
-func (c *Client) buildPackageDAG(repo, arch string, jobs int, selectedPackages []*meta.PackageInfo, buildOrder []string, pkgByName map[string]*meta.PackageInfo) error {
+func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing bool, selectedPackages []*meta.PackageInfo, buildOrder []string, pkgByName map[string]*meta.PackageInfo) error {
 	if len(buildOrder) == 0 {
 		return nil
 	}
@@ -147,7 +154,7 @@ func (c *Client) buildPackageDAG(repo, arch string, jobs int, selectedPackages [
 			defer wg.Done()
 			for task := range taskCh {
 				pkg := pkgByName[task.name]
-				resultCh <- runBuildWorker(repo, builderPath, arch, pkg, task.depsFile, task.logPath)
+				resultCh <- runBuildWorker(repo, builderPath, ohosSdk, arch, pkg, task.depsFile, task.logPath)
 			}
 		}()
 	}
@@ -178,6 +185,18 @@ func (c *Client) buildPackageDAG(repo, arch string, jobs int, selectedPackages [
 			skipped++
 			fmt.Printf("[skipped] %s (dependency failed: %s)\n", dep, root)
 			skipDependents(dep)
+		}
+	}
+
+	skipPending := func(reason string) {
+		for _, name := range buildOrder {
+			if status[name] != "pending" {
+				continue
+			}
+			status[name] = "skipped"
+			completed++
+			skipped++
+			fmt.Printf("[skipped] %s (%s)\n", name, reason)
 		}
 	}
 
@@ -225,6 +244,9 @@ func (c *Client) buildPackageDAG(repo, arch string, jobs int, selectedPackages [
 			failed++
 			fmt.Printf("[failed] %s %s (log: %s): %v\n", pkg.Name, pkg.Version, result.logPath, result.err)
 			skipDependents(result.name)
+			if !keepGoing {
+				skipPending("build stopped after failure")
+			}
 			continue
 		}
 
@@ -301,7 +323,7 @@ func buildDependencyMaps(packages []*meta.PackageInfo) (map[string][]string, map
 	return depsByName, dependentsByName, remainingDeps
 }
 
-func runBuildWorker(repo, builderPath, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
+func runBuildWorker(repo, builderPath, ohosSdk, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
 	result := buildResult{name: pkg.Name, logPath: logPath}
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -313,6 +335,7 @@ func runBuildWorker(repo, builderPath, arch string, pkg *meta.PackageInfo, depsF
 	buildFile := filepath.Join(repo, pkg.BuildFile)
 	cmd := exec.Command(builderPath, "--build-one", fmt.Sprintf("--cpu=%s", arch), fmt.Sprintf("--resolved-deps=%s", depsFile), buildFile)
 	cmd.Dir = repo
+	cmd.Env = buildWorkerEnv(ohosSdk)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Run(); err != nil {
@@ -320,7 +343,7 @@ func runBuildWorker(repo, builderPath, arch string, pkg *meta.PackageInfo, depsF
 		return result
 	}
 
-	cacheKey, err := readBuildID(repo, builderPath, arch, depsFile, buildFile)
+	cacheKey, err := readBuildID(repo, builderPath, ohosSdk, arch, depsFile, buildFile)
 	if err != nil {
 		result.err = err
 		return result
@@ -333,9 +356,10 @@ func runBuildWorker(repo, builderPath, arch string, pkg *meta.PackageInfo, depsF
 	return result
 }
 
-func readBuildID(repo, builderPath, arch, depsFile, buildFile string) (string, error) {
+func readBuildID(repo, builderPath, ohosSdk, arch, depsFile, buildFile string) (string, error) {
 	cmd := exec.Command(builderPath, "--cache-key", fmt.Sprintf("--cpu=%s", arch), fmt.Sprintf("--resolved-deps=%s", depsFile), buildFile)
 	cmd.Dir = repo
+	cmd.Env = buildWorkerEnv(ohosSdk)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to read build id: %w; output: %s", err, strings.TrimSpace(string(output)))
@@ -350,6 +374,10 @@ func readBuildID(repo, builderPath, arch, depsFile, buildFile string) (string, e
 		return "", fmt.Errorf("builder cache-key returned empty build_id")
 	}
 	return payload.BuildID, nil
+}
+
+func buildWorkerEnv(ohosSdk string) []string {
+	return append(os.Environ(), "OHOS_SDK="+ohosSdk)
 }
 
 func writeResolvedDepsFile(root string, pkg *meta.PackageInfo, arch string, deps []string, artifactByName map[string]string) (string, error) {
