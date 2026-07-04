@@ -647,30 +647,6 @@ func ParsePackageIndexFile(path string) ([]*meta.PackageInfo, error) {
 	return packages, nil
 }
 
-// ParseVersionFile parses a legacy VERSION file and returns all package infos.
-// Deprecated: use ParsePackageIndexFile with PKG_INDEX.json.
-func ParseVersionFile(path string) ([]*meta.PackageInfo, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read VERSION file: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	var packages []*meta.PackageInfo
-
-	for lineNum, line := range lines {
-		info, err := meta.ParseVersionLine(line)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", lineNum+1, err)
-		}
-		if info != nil {
-			packages = append(packages, info)
-		}
-	}
-
-	return packages, nil
-}
-
 // NormalizeDependency extracts package name from dependency constraint
 // e.g., "pkg1>=2.3" -> "pkg1"; "pkg2" -> "pkg2"
 func NormalizeDependency(dep string) string {

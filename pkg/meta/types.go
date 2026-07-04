@@ -1,8 +1,6 @@
 package meta
 
 import (
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -64,55 +62,4 @@ type PackageInfo struct {
 	SupportArchs []string `json:"support_archs,omitempty"`
 	BuildType    string   `json:"build_type,omitempty"`
 	PatchFiles   []string `json:"patch_files,omitempty"`
-}
-
-// ParseVersionLine parses a single line from VERSION file
-// Format: <name> <version> [dependencies] [build_dependencies]
-// Returns (PackageInfo, error)
-func ParseVersionLine(line string) (*PackageInfo, error) {
-	// Remove comments
-	if idx := strings.Index(line, "#"); idx >= 0 {
-		line = line[:idx]
-	}
-
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return nil, nil // Empty line
-	}
-
-	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return nil, fmt.Errorf("invalid VERSION line: need at least name and version")
-	}
-
-	info := &PackageInfo{
-		Name:         fields[0],
-		Version:      fields[1],
-		Depends:      []string{},
-		BuildDepends: []string{},
-	}
-
-	if len(fields) > 2 {
-		// Parse dependencies (3rd field)
-		deps := strings.Split(fields[2], ",")
-		for _, dep := range deps {
-			dep = strings.TrimSpace(dep)
-			if dep != "" {
-				info.Depends = append(info.Depends, dep)
-			}
-		}
-	}
-
-	if len(fields) > 3 {
-		// Parse build dependencies (4th field)
-		buildDeps := strings.Split(fields[3], ",")
-		for _, dep := range buildDeps {
-			dep = strings.TrimSpace(dep)
-			if dep != "" {
-				info.BuildDepends = append(info.BuildDepends, dep)
-			}
-		}
-	}
-
-	return info, nil
 }
