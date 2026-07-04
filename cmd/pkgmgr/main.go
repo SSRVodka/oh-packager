@@ -206,6 +206,7 @@ func main() {
 
 	// XCOMPILE
 	var xcompileArch string
+	var xcompileJobs int
 	xcompileCmd := &cobra.Command{
 		Use:   "xcompile <package> [package...]",
 		Short: "Build packages from source in topological order",
@@ -222,10 +223,11 @@ func main() {
 			if arch == "" {
 				arch = common.DefaultArch()
 			}
-			return cl.XCompile(args, arch)
+			return cl.XCompile(args, arch, xcompileJobs)
 		},
 	}
 	xcompileCmd.Flags().StringVar(&xcompileArch, "arch", "", "target architecture (default from config)")
+	xcompileCmd.Flags().IntVarP(&xcompileJobs, "jobs", "j", 1, "number of build jobs")
 
 	// uninstall not supported for now
 	// root.AddCommand(cfgCmd, listCmd, installCmd, uninstallCmd)
