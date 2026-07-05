@@ -4,6 +4,26 @@ import (
 	"time"
 )
 
+// PackageID identifies one concrete package version in the source package graph.
+type PackageID struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+func (id PackageID) String() string {
+	if id.Version == "" {
+		return id.Name
+	}
+	return id.Name + "@" + id.Version
+}
+
+func (p *PackageInfo) ID() PackageID {
+	if p == nil {
+		return PackageID{}
+	}
+	return PackageID{Name: p.Name, Version: p.Version}
+}
+
 // Manifest describes a package.
 type Manifest struct {
 	Name          string   `json:"name"`

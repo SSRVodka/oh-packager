@@ -15,13 +15,13 @@ import (
 )
 
 type buildTask struct {
-	name     string
+	id       meta.PackageID
 	depsFile string
 	logPath  string
 }
 
 type buildResult struct {
-	name       string
+	id         meta.PackageID
 	artifactID string
 	logPath    string
 	cacheHit   bool
@@ -88,9 +88,9 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoin
 	// Print the dependency graph
 	PrintDependencyGraph(selectedPackages, buildOrder)
 
-	pkgByName := make(map[string]*meta.PackageInfo, len(selectedPackages))
+	pkgByID := make(map[meta.PackageID]*meta.PackageInfo, len(selectedPackages))
 	for _, pkg := range selectedPackages {
-		pkgByName[pkg.Name] = pkg
+		pkgByID[pkg.ID()] = pkg
 	}
 
 	// change working directory
@@ -99,7 +99,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoin
 		return chdirErr
 	}
 
-	if err := c.buildPackageDAG(repo, c.Config.OhosSdk, arch, jobs, keepGoing, selectedPackages, buildOrder, pkgByName); err != nil {
+	if err := c.buildPackageDAG(repo, c.Config.OhosSdk, arch, jobs, keepGoing, selectedPackages, buildOrder, pkgByID); err != nil {
 		return err
 	}
 
@@ -108,7 +108,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoin
 	return nil
 }
 
-func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing bool, selectedPackages []*meta.PackageInfo, buildOrder []string, pkgByName map[string]*meta.PackageInfo) error {
+func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing bool, selectedPackages []*meta.PackageInfo, buildOrder []meta.PackageID, pkgByID map[meta.PackageID]*meta.PackageInfo) error {
 	if len(buildOrder) == 0 {
 		return nil
 	}
@@ -116,10 +116,10 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		jobs = len(buildOrder)
 	}
 
-	depsByName, dependentsByName, remainingDeps := buildDependencyMaps(selectedPackages)
-	orderIndex := make(map[string]int, len(buildOrder))
-	for i, name := range buildOrder {
-		orderIndex[name] = i
+	depsByID, dependentsByID, remainingDeps := buildDependencyMaps(selectedPackages)
+	orderIndex := make(map[meta.PackageID]int, len(buildOrder))
+	for i, id := range buildOrder {
+		orderIndex[id] = i
 	}
 
 	logRoot := filepath.Join(repo, ".ohloha", "logs")
@@ -131,18 +131,18 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		return fmt.Errorf("failed to create resolved deps dir: %w", err)
 	}
 
-	ready := make([]string, 0)
-	for _, name := range buildOrder {
-		if remainingDeps[name] == 0 {
-			ready = append(ready, name)
+	ready := make([]meta.PackageID, 0)
+	for _, id := range buildOrder {
+		if remainingDeps[id] == 0 {
+			ready = append(ready, id)
 		}
 	}
 
-	status := make(map[string]string, len(buildOrder))
-	for _, name := range buildOrder {
-		status[name] = "pending"
+	status := make(map[meta.PackageID]string, len(buildOrder))
+	for _, id := range buildOrder {
+		status[id] = "pending"
 	}
-	artifactByName := make(map[string]string, len(buildOrder))
+	artifactByID := make(map[meta.PackageID]string, len(buildOrder))
 
 	builderPath := filepath.Join(repo, "builder.sh")
 	taskCh := make(chan buildTask, jobs)
@@ -153,7 +153,7 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		go func() {
 			defer wg.Done()
 			for task := range taskCh {
-				pkg := pkgByName[task.name]
+				pkg := pkgByID[task.id]
 				resultCh <- runBuildWorker(repo, builderPath, ohosSdk, arch, pkg, task.depsFile, task.logPath)
 			}
 		}()
@@ -170,9 +170,9 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		})
 	}
 
-	skipDependents := func(root string) {}
-	skipDependents = func(root string) {
-		dependents := append([]string(nil), dependentsByName[root]...)
+	skipDependents := func(root meta.PackageID) {}
+	skipDependents = func(root meta.PackageID) {
+		dependents := append([]meta.PackageID(nil), dependentsByID[root]...)
 		sort.Slice(dependents, func(i, j int) bool {
 			return orderIndex[dependents[i]] < orderIndex[dependents[j]]
 		})
@@ -189,38 +189,38 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 	}
 
 	skipPending := func(reason string) {
-		for _, name := range buildOrder {
-			if status[name] != "pending" {
+		for _, id := range buildOrder {
+			if status[id] != "pending" {
 				continue
 			}
-			status[name] = "skipped"
+			status[id] = "skipped"
 			completed++
 			skipped++
-			fmt.Printf("[skipped] %s (%s)\n", name, reason)
+			fmt.Printf("[skipped] %s (%s)\n", id, reason)
 		}
 	}
 
 	enqueueReady := func() error {
 		sortReady()
 		for running < jobs && len(ready) > 0 {
-			name := ready[0]
+			id := ready[0]
 			ready = ready[1:]
-			if status[name] != "pending" {
+			if status[id] != "pending" {
 				continue
 			}
-			pkg := pkgByName[name]
+			pkg := pkgByID[id]
 			if pkg == nil {
-				return fmt.Errorf("internal error: package %s missing from selected package map", name)
+				return fmt.Errorf("internal error: package %s missing from selected package map", id)
 			}
-			depsFile, err := writeResolvedDepsFile(resolvedDepsRoot, pkg, arch, depsByName[name], artifactByName)
+			depsFile, err := writeResolvedDepsFile(repo, resolvedDepsRoot, pkg, arch, depsByID[id], pkgByID, artifactByID)
 			if err != nil {
 				return err
 			}
 			logPath := buildLogPath(logRoot, pkg, arch)
-			status[name] = "running"
+			status[id] = "running"
 			running++
 			fmt.Printf("[running] %s %s (log: %s)\n", pkg.Name, pkg.Version, logPath)
-			taskCh <- buildTask{name: name, depsFile: depsFile, logPath: logPath}
+			taskCh <- buildTask{id: id, depsFile: depsFile, logPath: logPath}
 		}
 		return nil
 	}
@@ -238,27 +238,27 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		result := <-resultCh
 		running--
 		completed++
-		pkg := pkgByName[result.name]
+		pkg := pkgByID[result.id]
 		if result.err != nil {
-			status[result.name] = "failed"
+			status[result.id] = "failed"
 			failed++
 			fmt.Printf("[failed] %s %s (log: %s): %v\n", pkg.Name, pkg.Version, result.logPath, result.err)
-			skipDependents(result.name)
+			skipDependents(result.id)
 			if !keepGoing {
 				skipPending("build stopped after failure")
 			}
 			continue
 		}
 
-		status[result.name] = "success"
-		artifactByName[result.name] = result.artifactID
+		status[result.id] = "success"
+		artifactByID[result.id] = result.artifactID
 		if result.cacheHit {
 			fmt.Printf("[cache-hit] %s %s (artifact: %s)\n", pkg.Name, pkg.Version, result.artifactID)
 		} else {
 			fmt.Printf("[success] %s %s (artifact: %s)\n", pkg.Name, pkg.Version, result.artifactID)
 		}
 
-		dependents := append([]string(nil), dependentsByName[result.name]...)
+		dependents := append([]meta.PackageID(nil), dependentsByID[result.id]...)
 		sort.Slice(dependents, func(i, j int) bool {
 			return orderIndex[dependents[i]] < orderIndex[dependents[j]]
 		})
@@ -285,46 +285,47 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 	return nil
 }
 
-func buildDependencyMaps(packages []*meta.PackageInfo) (map[string][]string, map[string][]string, map[string]int) {
-	selected := make(map[string]bool, len(packages))
+func buildDependencyMaps(packages []*meta.PackageInfo) (map[meta.PackageID][]meta.PackageID, map[meta.PackageID][]meta.PackageID, map[meta.PackageID]int) {
+	selected := make(map[string]meta.PackageID, len(packages))
 	for _, pkg := range packages {
-		selected[pkg.Name] = true
+		selected[pkg.Name] = pkg.ID()
 	}
 
-	depsByName := make(map[string][]string, len(packages))
-	dependentsByName := make(map[string][]string, len(packages))
-	remainingDeps := make(map[string]int, len(packages))
+	depsByID := make(map[meta.PackageID][]meta.PackageID, len(packages))
+	dependentsByID := make(map[meta.PackageID][]meta.PackageID, len(packages))
+	remainingDeps := make(map[meta.PackageID]int, len(packages))
 	for _, pkg := range packages {
-		depSet := make(map[string]bool)
+		id := pkg.ID()
+		depSet := make(map[meta.PackageID]bool)
 		for _, dep := range pkg.Depends {
-			depName := common.NormalizeDependency(dep)
-			if selected[depName] {
-				depSet[depName] = true
+			depName := dependencyName(dep)
+			if depID, exists := selected[depName]; exists {
+				depSet[depID] = true
 			}
 		}
 		for _, dep := range pkg.BuildDepends {
-			depName := common.NormalizeDependency(dep)
-			if selected[depName] {
-				depSet[depName] = true
+			depName := dependencyName(dep)
+			if depID, exists := selected[depName]; exists {
+				depSet[depID] = true
 			}
 		}
 
-		deps := make([]string, 0, len(depSet))
+		deps := make([]meta.PackageID, 0, len(depSet))
 		for dep := range depSet {
 			deps = append(deps, dep)
 		}
-		sort.Strings(deps)
-		depsByName[pkg.Name] = deps
-		remainingDeps[pkg.Name] = len(deps)
+		sortPackageIDs(deps)
+		depsByID[id] = deps
+		remainingDeps[id] = len(deps)
 		for _, dep := range deps {
-			dependentsByName[dep] = append(dependentsByName[dep], pkg.Name)
+			dependentsByID[dep] = append(dependentsByID[dep], id)
 		}
 	}
-	return depsByName, dependentsByName, remainingDeps
+	return depsByID, dependentsByID, remainingDeps
 }
 
 func runBuildWorker(repo, builderPath, ohosSdk, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
-	result := buildResult{name: pkg.Name, logPath: logPath}
+	result := buildResult{id: pkg.ID(), logPath: logPath}
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		result.err = fmt.Errorf("failed to create log file: %w", err)
@@ -380,21 +381,52 @@ func buildWorkerEnv(ohosSdk string) []string {
 	return append(os.Environ(), "OHOS_SDK="+ohosSdk)
 }
 
-func writeResolvedDepsFile(root string, pkg *meta.PackageInfo, arch string, deps []string, artifactByName map[string]string) (string, error) {
-	dependencyArtifacts := make(map[string]string, len(deps))
-	for _, dep := range deps {
-		artifactID := artifactByName[dep]
-		if artifactID == "" {
-			return "", fmt.Errorf("internal error: dependency artifact for %s -> %s is not available", pkg.Name, dep)
-		}
-		dependencyArtifacts[dep] = artifactID
+func writeResolvedDepsFile(repo, root string, pkg *meta.PackageInfo, arch string, deps []meta.PackageID, pkgByID map[meta.PackageID]*meta.PackageInfo, artifactByID map[meta.PackageID]string) (string, error) {
+	type resolvedDependency struct {
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		ArtifactID string `json:"artifact_id"`
+		Path       string `json:"path"`
 	}
+
+	dependencyArtifacts := make(map[string]resolvedDependency, len(deps))
+	dependencyPaths := make(map[string]string, len(deps))
+	dependencyList := make([]resolvedDependency, 0, len(deps))
+	for _, dep := range deps {
+		depPkg := pkgByID[dep]
+		if depPkg == nil {
+			return "", fmt.Errorf("internal error: dependency package %s for %s is not available", dep, pkg.ID())
+		}
+		artifactID := artifactByID[dep]
+		if artifactID == "" {
+			return "", fmt.Errorf("internal error: dependency artifact for %s -> %s is not available", pkg.ID(), dep)
+		}
+		distPath := filepath.Join(repo, fmt.Sprintf("dist.%s.%s-%s", arch, depPkg.Name, depPkg.Version))
+		resolved := resolvedDependency{
+			Name:       depPkg.Name,
+			Version:    depPkg.Version,
+			ArtifactID: artifactID,
+			Path:       distPath,
+		}
+		dependencyArtifacts[depPkg.Name] = resolved
+		dependencyPaths[depPkg.Name] = distPath
+		dependencyList = append(dependencyList, resolved)
+	}
+	sort.Slice(dependencyList, func(i, j int) bool {
+		if dependencyList[i].Name != dependencyList[j].Name {
+			return dependencyList[i].Name < dependencyList[j].Name
+		}
+		return dependencyList[i].Version < dependencyList[j].Version
+	})
 
 	path := filepath.Join(root, fmt.Sprintf("%s-%s-%s.json", safePathComponent(pkg.Name), safePathComponent(pkg.Version), safePathComponent(arch)))
 	tmpPath := path + ".tmp"
-	data, err := json.MarshalIndent(map[string]map[string]string{
+	payload := map[string]any{
 		"dependency_artifacts": dependencyArtifacts,
-	}, "", "  ")
+		"dependency_paths":     dependencyPaths,
+		"dependencies":         dependencyList,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -416,61 +448,4 @@ func buildLogPath(root string, pkg *meta.PackageInfo, arch string) string {
 func safePathComponent(value string) string {
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_", "\t", "_", "\n", "_")
 	return replacer.Replace(value)
-}
-
-// selectPackagesWithDeps recursively collects packages and their dependencies
-func (c *Client) selectPackagesWithDeps(allPackages []*meta.PackageInfo, requestedNames []string) ([]*meta.PackageInfo, error) {
-	pkgMap := make(map[string]*meta.PackageInfo)
-	for _, pkg := range allPackages {
-		pkgMap[pkg.Name] = pkg
-	}
-
-	selected := make(map[string]*meta.PackageInfo)
-	var visit func(name string) error
-
-	visit = func(name string) error {
-		if _, visited := selected[name]; visited {
-			return nil
-		}
-
-		pkg, exists := pkgMap[name]
-		if !exists {
-			return fmt.Errorf("package not found in package index: %s", name)
-		}
-
-		selected[name] = pkg
-
-		// Visit runtime dependencies
-		for _, dep := range pkg.Depends {
-			depName := common.NormalizeDependency(dep)
-			if err := visit(depName); err != nil {
-				return err
-			}
-		}
-
-		// Visit build-time dependencies
-		for _, dep := range pkg.BuildDepends {
-			depName := common.NormalizeDependency(dep)
-			if err := visit(depName); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	// Visit all requested packages
-	for _, name := range requestedNames {
-		if err := visit(name); err != nil {
-			return nil, err
-		}
-	}
-
-	// Convert map to slice
-	var result []*meta.PackageInfo
-	for _, pkg := range selected {
-		result = append(result, pkg)
-	}
-
-	return result, nil
 }
