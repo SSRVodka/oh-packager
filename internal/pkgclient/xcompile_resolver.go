@@ -168,37 +168,7 @@ func addDependencyRequirements(requirements map[string][]packageRequirement, dep
 }
 
 func parseDependencySpec(spec string) (string, []common.Constraint, error) {
-	parts := strings.Split(spec, ",")
-	if len(parts) == 0 {
-		return "", nil, fmt.Errorf("empty dependency")
-	}
-
-	first := strings.TrimSpace(parts[0])
-	name, firstConstraint, err := common.ParseDep(first)
-	if err != nil {
-		return "", nil, err
-	}
-
-	constraints := []common.Constraint{firstConstraint}
-	for _, part := range parts[1:] {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		dep := part
-		if strings.HasPrefix(part, ">=") || strings.HasPrefix(part, "<=") || strings.HasPrefix(part, "==") || strings.HasPrefix(part, ">") || strings.HasPrefix(part, "<") {
-			dep = name + part
-		}
-		partName, constraint, err := common.ParseDep(dep)
-		if err != nil {
-			return "", nil, err
-		}
-		if partName != name {
-			return "", nil, fmt.Errorf("mixed package names in dependency expression: %s and %s", name, partName)
-		}
-		constraints = append(constraints, constraint)
-	}
-	return name, constraints, nil
+	return common.ParseDependencySpec(spec)
 }
 
 func addRequirement(requirements map[string][]packageRequirement, name string, constraint common.Constraint, source string) {
@@ -231,6 +201,17 @@ func constraintsOnly(reqs []packageRequirement) []common.Constraint {
 		constraints = append(constraints, req.Constraint)
 	}
 	return constraints
+}
+
+func requirementsFromConstraints(constraints []common.Constraint, source string) []packageRequirement {
+	requirements := make([]packageRequirement, 0, len(constraints))
+	for _, constraint := range constraints {
+		requirements = append(requirements, packageRequirement{
+			Constraint: constraint,
+			Source:     source,
+		})
+	}
+	return requirements
 }
 
 func cloneRequirements(in map[string][]packageRequirement) map[string][]packageRequirement {

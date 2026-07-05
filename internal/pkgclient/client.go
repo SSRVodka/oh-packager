@@ -215,6 +215,13 @@ func (c *Client) install(pkgNameOrLocalFileList []string, prefix string, noConfi
 			}
 			pkgPath = pkgNameOrLocalFile
 			// add pkgPath into result
+			if existingPath, exists := name2pkgPath[pkgName]; exists && existingPath != pkgPath {
+				_, existingVersion, _, _, existingErr := common.ParsePkgNameFromPath(existingPath)
+				if existingErr != nil {
+					return existingErr
+				}
+				return fmt.Errorf("cannot install multiple versions of %s in one prefix: %s and %s", pkgName, existingVersion, ver)
+			}
 			name2pkgPath[pkgName] = pkgPath
 			// build constraint string
 			pkgName = pkgName + " == " + ver
@@ -541,6 +548,7 @@ func (c *Client) ResolveDependencies(requested []string, arch string) (map[strin
 	// constraints map: name -> []Constraint
 	constraints := map[string][]common.Constraint{}
 	queue := []string{}
+	chosen := map[string]meta.IndexEntry{}
 
 	// initial requested: they may be plain names/empty
 	for _, r := range requested {
@@ -548,22 +556,21 @@ func (c *Client) ResolveDependencies(requested []string, arch string) (map[strin
 		if r == "" {
 			continue
 		}
-		depName, depConstraints, depErr := common.ParseDep(r)
+		depName, depConstraints, depErr := parseDependencySpec(r)
 		if depErr != nil {
 			return nil, fmt.Errorf("error while resolving dependencies for '%s': %+v", r, depErr)
 		}
 		oldConstraints, hasConstraints := constraints[depName]
+		constraints[depName] = append(oldConstraints, depConstraints...)
 		if hasConstraints {
-			constraints[depName] = append(oldConstraints, depConstraints)
+			if chosenEntry, ok := chosen[depName]; ok && !common.SatisfiesConstraints(chosenEntry.Version, constraints[depName]) {
+				return nil, fmt.Errorf("resolved package %s %s conflicts with requested constraints %s", depName, chosenEntry.Version, formatRequirements(depName, requirementsFromConstraints(constraints[depName], "install request")))
+			}
 		} else {
 			// first time check for depName: add to queue
-			constraints[depName] = []common.Constraint{depConstraints}
 			queue = append(queue, depName)
 		}
 	}
-
-	// result map chosen[name] = IndexEntry
-	chosen := map[string]meta.IndexEntry{}
 
 	// BFS-like process: while queue has names, attempt to pick a version satisfying constraints,
 	// fetch its manifest, and enqueue its dependencies (merging constraints if present).
@@ -604,7 +611,7 @@ func (c *Client) ResolveDependencies(requested []string, arch string) (map[strin
 		curDeps := chosenEntry.Depends
 		// iterate declared dependencies and merge constraints
 		for _, dep := range curDeps {
-			depName, depC, parseErr := common.ParseDep(dep)
+			depName, depConstraints, parseErr := parseDependencySpec(dep)
 			if parseErr != nil {
 				return nil, fmt.Errorf("error while resolving dependencies for '%s': %+v", dep, parseErr)
 			}
@@ -614,7 +621,10 @@ func (c *Client) ResolveDependencies(requested []string, arch string) (map[strin
 			if _, ok := constraints[depName]; !ok {
 				queue = append(queue, depName)
 			}
-			constraints[depName] = append(cur, depC)
+			constraints[depName] = append(cur, depConstraints...)
+			if selectedEntry, ok := chosen[depName]; ok && !common.SatisfiesConstraints(selectedEntry.Version, constraints[depName]) {
+				return nil, fmt.Errorf("resolved package %s %s conflicts with dependency constraints %s", depName, selectedEntry.Version, formatRequirements(depName, requirementsFromConstraints(constraints[depName], "install dependency")))
+			}
 		}
 	}
 

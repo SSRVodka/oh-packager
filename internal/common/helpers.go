@@ -324,6 +324,67 @@ func ParseDep(dep string) (string, Constraint, error) {
 	return name, Constraint{Op: op, Ver: verStr}, nil
 }
 
+func SplitDependencyCSV(csv string) []string {
+	parts := strings.Split(csv, ",")
+	deps := make([]string, 0, len(parts))
+	current := ""
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.HasPrefix(part, ">=") || strings.HasPrefix(part, "<=") || strings.HasPrefix(part, "==") || strings.HasPrefix(part, ">") || strings.HasPrefix(part, "<") {
+			if current == "" {
+				current = part
+			} else {
+				current += "," + part
+			}
+			continue
+		}
+		if current != "" {
+			deps = append(deps, current)
+		}
+		current = part
+	}
+	if current != "" {
+		deps = append(deps, current)
+	}
+	return deps
+}
+
+func ParseDependencySpec(spec string) (string, []Constraint, error) {
+	parts := SplitDependencyCSV(spec)
+	if len(parts) != 1 {
+		return "", nil, fmt.Errorf("invalid dependency expression: %s", spec)
+	}
+
+	rawParts := strings.Split(parts[0], ",")
+	name, firstConstraint, err := ParseDep(rawParts[0])
+	if err != nil {
+		return "", nil, err
+	}
+
+	constraints := []Constraint{firstConstraint}
+	for _, part := range rawParts[1:] {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.HasPrefix(part, ">=") || strings.HasPrefix(part, "<=") || strings.HasPrefix(part, "==") || strings.HasPrefix(part, ">") || strings.HasPrefix(part, "<") {
+			part = name + part
+		}
+		partName, constraint, err := ParseDep(part)
+		if err != nil {
+			return "", nil, err
+		}
+		if partName != name {
+			return "", nil, fmt.Errorf("mixed package names in dependency expression: %s and %s", name, partName)
+		}
+		constraints = append(constraints, constraint)
+	}
+	return name, constraints, nil
+}
+
 func JoinURL(base, rel string) string {
 	base = strings.TrimRight(base, "/")
 	rel = strings.TrimLeft(rel, "/")

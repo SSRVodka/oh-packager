@@ -29,12 +29,7 @@ func main() {
 				outDir = "."
 			}
 			for _, rawDep := range rawDepends {
-				for _, part := range strings.Split(rawDep, ",") {
-					dep := strings.TrimSpace(part)
-					if dep != "" {
-						depends = append(depends, dep)
-					}
-				}
+				depends = append(depends, common.SplitDependencyCSV(rawDep)...)
 			}
 
 			return buildPackage(payloadDir, outDir, name, version, arch, ohosAPI, depends, !noArchLibIsolation)
@@ -84,7 +79,7 @@ func buildPackage(payloadDir, outDir, name, version, arch, ohosAPI string, deps 
 	}
 	// validate deps
 	for _, dep := range deps {
-		if _, _, err := common.ParseDep(dep); err != nil {
+		if _, _, err := common.ParseDependencySpec(dep); err != nil {
 			return err
 		}
 	}
