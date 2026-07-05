@@ -11,7 +11,7 @@ JOBS="${OHLOHA_JOBS:-$(nproc 2>/dev/null || echo 1)}"
     openblas libaacplus x264 alsa-lib libiconv ffmpeg \
     libgmp libmpfr libmpc binutils patchelf \
     python3-cython python3-build python3-numpy2 \
-    python3-wheel python3-setuptools opencv python3-opencv python3-netifaces python3-pillow python3-rpds \
+    python3-wheel python3-setuptools opencv python3-opencv python3-netifaces python3-pillow \
     icu libxml2 asio console_bridge nasm attr acl assimp fmt yaml-cpp libpsl curl boost eigen qhull libccd \
     SuiteSparse gflags glog gtest ceres-solver zstd zeromq libexpat libpng g2o geographiclib tinyxml2 \
     oneTBB pcre2 swig YDLidar-SDK llama.cpp rsync lz4 octomap xtl xtensor xsimd nanoflann nlohmann-json \
