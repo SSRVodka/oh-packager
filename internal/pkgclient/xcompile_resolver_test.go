@@ -64,6 +64,33 @@ func TestSelectPackagesReportsConstraintConflict(t *testing.T) {
 	}
 }
 
+func TestSelectPackagesReportsMissingPackageOnMultipleLines(t *testing.T) {
+	client := &Client{}
+	packages := []*meta.PackageInfo{
+		{Name: "consumer", Version: "1.0.0", BuildFile: "consumer/BUILD", Depends: []string{"missing>=2"}},
+	}
+
+	_, err := client.selectPackagesWithDeps(packages, []string{"consumer"})
+	if err == nil {
+		t.Fatal("selectPackagesWithDeps unexpectedly succeeded")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"cannot resolve consumer",
+		"required by:",
+		"blocked by:",
+		"cannot resolve missing",
+		"reason: package not found in package index",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error does not contain %q:\n%s", want, msg)
+		}
+	}
+	if !strings.Contains(msg, "\n") {
+		t.Fatalf("error is not multi-line: %s", msg)
+	}
+}
+
 func selectedVersions(packages []*meta.PackageInfo) map[string]string {
 	versions := make(map[string]string, len(packages))
 	for _, pkg := range packages {

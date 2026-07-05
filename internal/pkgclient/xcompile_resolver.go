@@ -89,7 +89,11 @@ func (r *packageResolver) solve(requirements map[string][]packageRequirement, se
 
 	candidates := r.byName[name]
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("package not found in package index: %s", name)
+		return nil, &packageResolutionError{
+			Name:         name,
+			Requirements: requirements[name],
+			Reason:       "package not found in package index",
+		}
 	}
 
 	constraints := constraintsOnly(requirements[name])
@@ -119,9 +123,17 @@ func (r *packageResolver) solve(requirements map[string][]packageRequirement, se
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("cannot resolve %s with %s: %w", name, formatRequirements(name, requirements[name]), lastErr)
+		return nil, &packageResolutionError{
+			Name:         name,
+			Requirements: requirements[name],
+			Cause:        lastErr,
+		}
 	}
-	return nil, fmt.Errorf("no version of %s satisfies %s", name, formatRequirements(name, requirements[name]))
+	return nil, &packageResolutionError{
+		Name:         name,
+		Requirements: requirements[name],
+		Reason:       "no indexed version satisfies all constraints",
+	}
 }
 
 func nextUnresolvedRequirement(requirements map[string][]packageRequirement, selected map[string]*meta.PackageInfo) string {
@@ -244,6 +256,63 @@ func formatRequirements(name string, reqs []packageRequirement) string {
 	}
 	sort.Strings(parts)
 	return fmt.Sprintf("%s constraints [%s]", name, strings.Join(parts, "; "))
+}
+
+type packageResolutionError struct {
+	Name         string
+	Requirements []packageRequirement
+	Reason       string
+	Cause        error
+}
+
+func (e *packageResolutionError) Error() string {
+	var b strings.Builder
+	e.write(&b, 0)
+	return b.String()
+}
+
+func (e *packageResolutionError) Unwrap() error {
+	return e.Cause
+}
+
+func (e *packageResolutionError) write(b *strings.Builder, indent int) {
+	pad := strings.Repeat(" ", indent)
+	fmt.Fprintf(b, "%scannot resolve %s\n", pad, e.Name)
+	if len(e.Requirements) > 0 {
+		fmt.Fprintf(b, "%srequired by:\n", pad)
+		for _, line := range formatRequirementLines(e.Requirements) {
+			fmt.Fprintf(b, "%s  - %s\n", pad, line)
+		}
+	}
+	if e.Reason != "" {
+		fmt.Fprintf(b, "%sreason: %s\n", pad, e.Reason)
+	}
+	if e.Cause != nil {
+		fmt.Fprintf(b, "%sblocked by:\n", pad)
+		if nested, ok := e.Cause.(*packageResolutionError); ok {
+			nested.write(b, indent+2)
+		} else {
+			for _, line := range strings.Split(e.Cause.Error(), "\n") {
+				if line == "" {
+					continue
+				}
+				fmt.Fprintf(b, "%s  %s\n", pad, line)
+			}
+		}
+	}
+}
+
+func formatRequirementLines(reqs []packageRequirement) []string {
+	lines := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		constraint := req.Constraint.Op + req.Constraint.Ver
+		if req.Constraint.Op == "" {
+			constraint = "any"
+		}
+		lines = append(lines, fmt.Sprintf("%s from %s", constraint, req.Source))
+	}
+	sort.Strings(lines)
+	return lines
 }
 
 func compareVersions(a, b string) int {

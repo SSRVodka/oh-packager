@@ -1,14 +1,18 @@
 package pkgclient
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/SSRVodka/oh-packager/internal/common"
 	"github.com/SSRVodka/oh-packager/pkg/meta"
@@ -30,6 +34,9 @@ type buildResult struct {
 
 // XCompile builds packages from source in topological order.
 func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoing bool) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if c.Config.PkgSrcRepo == "" {
 		return fmt.Errorf("package source repository for cross compile not configured")
 	}
@@ -99,7 +106,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoin
 		return chdirErr
 	}
 
-	if err := c.buildPackageDAG(repo, c.Config.OhosSdk, arch, jobs, keepGoing, selectedPackages, buildOrder, pkgByID); err != nil {
+	if err := c.buildPackageDAG(ctx, repo, c.Config.OhosSdk, arch, jobs, keepGoing, selectedPackages, buildOrder, pkgByID); err != nil {
 		return err
 	}
 
@@ -108,7 +115,7 @@ func (c *Client) XCompile(packageNames []string, arch string, jobs int, keepGoin
 	return nil
 }
 
-func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing bool, selectedPackages []*meta.PackageInfo, buildOrder []meta.PackageID, pkgByID map[meta.PackageID]*meta.PackageInfo) error {
+func (c *Client) buildPackageDAG(ctx context.Context, repo, ohosSdk, arch string, jobs int, keepGoing bool, selectedPackages []*meta.PackageInfo, buildOrder []meta.PackageID, pkgByID map[meta.PackageID]*meta.PackageInfo) error {
 	if len(buildOrder) == 0 {
 		return nil
 	}
@@ -154,7 +161,7 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 			defer wg.Done()
 			for task := range taskCh {
 				pkg := pkgByID[task.id]
-				resultCh <- runBuildWorker(repo, builderPath, ohosSdk, arch, pkg, task.depsFile, task.logPath)
+				resultCh <- runBuildWorker(ctx, repo, builderPath, ohosSdk, arch, pkg, task.depsFile, task.logPath)
 			}
 		}()
 	}
@@ -220,14 +227,26 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 			status[id] = "running"
 			running++
 			fmt.Printf("[running] %s %s (log: %s)\n", pkg.Name, pkg.Version, logPath)
-			taskCh <- buildTask{id: id, depsFile: depsFile, logPath: logPath}
+			select {
+			case taskCh <- buildTask{id: id, depsFile: depsFile, logPath: logPath}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
 	}
 
+	taskChClosed := false
+	closeTasks := func() {
+		if !taskChClosed {
+			close(taskCh)
+			taskChClosed = true
+		}
+	}
+
 	for completed < len(buildOrder) {
 		if err := enqueueReady(); err != nil {
-			close(taskCh)
+			closeTasks()
 			wg.Wait()
 			return err
 		}
@@ -235,7 +254,14 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 			break
 		}
 
-		result := <-resultCh
+		var result buildResult
+		select {
+		case result = <-resultCh:
+		case <-ctx.Done():
+			closeTasks()
+			wg.Wait()
+			return fmt.Errorf("xcompile canceled: %w", ctx.Err())
+		}
 		running--
 		completed++
 		pkg := pkgByID[result.id]
@@ -273,7 +299,7 @@ func (c *Client) buildPackageDAG(repo, ohosSdk, arch string, jobs int, keepGoing
 		}
 	}
 
-	close(taskCh)
+	closeTasks()
 	wg.Wait()
 
 	if failed > 0 || skipped > 0 {
@@ -324,7 +350,7 @@ func buildDependencyMaps(packages []*meta.PackageInfo) (map[meta.PackageID][]met
 	return depsByID, dependentsByID, remainingDeps
 }
 
-func runBuildWorker(repo, builderPath, ohosSdk, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
+func runBuildWorker(ctx context.Context, repo, builderPath, ohosSdk, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
 	result := buildResult{id: pkg.ID(), logPath: logPath}
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -334,11 +360,27 @@ func runBuildWorker(repo, builderPath, ohosSdk, arch string, pkg *meta.PackageIn
 	defer logFile.Close()
 
 	buildFile := filepath.Join(repo, pkg.BuildFile)
-	cmd := exec.Command(builderPath, "--build-one", fmt.Sprintf("--cpu=%s", arch), fmt.Sprintf("--resolved-deps=%s", depsFile), buildFile)
+	cmd := exec.CommandContext(ctx, builderPath, "--build-one", fmt.Sprintf("--cpu=%s", arch), fmt.Sprintf("--resolved-deps=%s", depsFile), buildFile)
 	cmd.Dir = repo
 	cmd.Env = buildWorkerEnv(ohosSdk)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 10 * time.Second
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		pgid := -cmd.Process.Pid
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+			return err
+		}
+		go func() {
+			time.Sleep(5 * time.Second)
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		}()
+		return nil
+	}
 	if err := cmd.Run(); err != nil {
 		result.err = err
 		return result
