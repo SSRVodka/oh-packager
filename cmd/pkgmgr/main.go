@@ -13,8 +13,10 @@ import (
 func main() {
 	var rootURL, arch, channel, ohosSdkDir, ohosSdkDirAbs, pkgSrcRepoDir string
 	root := &cobra.Command{
-		Use:   "ohla",
-		Short: "Client for the package repo (list, install, uninstall, config)",
+		Use:           "ohla",
+		Short:         "Client for the package repo (list, install, uninstall, config)",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 
 	// CONFIG
