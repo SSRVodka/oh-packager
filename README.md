@@ -62,7 +62,7 @@ Use `--help` for more details.
    OHOS_CPU=x86_64 ./scripts/build_and_install.sh --prefix "${PWD}/out" openssl curl
    ```
 
-   也可以一次指定多个上层库，`ohla` 会读取 `ohloha_pkgs/PKG_INDEX.json`，根据包的 `pkg_deps` 和 `pkg_build_deps` 自动收集依赖、解析版本约束、拓扑排序，并用并发 worker 调用 `ohloha_pkgs/builder.sh --build-one` 交叉编译。也就是说，下面命令中的 `opencv`、`ffmpeg` 及其依赖都会由 `ohla` 管理，不需要手工把依赖逐个排好序：
+   也可以一次指定多个上层库，`ohla` 会读取 `ohloha_pkgs/PKG_INDEX.json`，根据包的 `pkg_deps` 和 `pkg_build_deps` 自动收集依赖、解析版本约束、拓扑排序，并用并发 worker 调用 `ohloha_pkgs/builder.sh --build-one --resolved-deps=...` 交叉编译。也就是说，下面命令中的 `opencv`、`ffmpeg` 及其依赖都会由 `ohla` 管理，不需要手工把依赖逐个排好序；每个 worker 会收到已解析的依赖路径，不依赖 `builder.sh` 扫描已有 dist 目录猜测版本：
 
    ```sh
    OHOS_CPU=x86_64 ./scripts/build_and_install.sh --prefix "${PWD}/out" opencv ffmpeg
@@ -92,7 +92,7 @@ Use `--help` for more details.
    OHOS_CPU=aarch64 ./scripts/build_and_install.sh openssl curl
    ```
 
-   脚本会先确保 `build/bin` 下的 `ohla`、`ohla-tool`、`ohla-server` 可用，再执行 `ohla config --pkg-src-repo ./ohloha_pkgs` 和 `ohla xcompile --arch ${OHOS_CPU} --jobs N ...`，最后把 `ohloha_pkgs/dist.<arch>.<pkg>-<version>` 打成可被 `ohla add` 安装的包。迁移期仍会维护 `ohloha_pkgs/dist.<arch>.<pkg>` 作为当前选择版本的兼容目录。
+   脚本会先确保 `build/bin` 下的 `ohla`、`ohla-tool`、`ohla-server` 可用，再执行 `ohla config --pkg-src-repo ./ohloha_pkgs` 和 `ohla xcompile --arch ${OHOS_CPU} --jobs N ...`，最后把 `ohloha_pkgs/dist.<arch>.<pkg>-<version>` 打成可被 `ohla add` 安装的包。构建器不再自动维护 `ohloha_pkgs/dist.<arch>.<pkg>` legacy alias；如外部流程确实需要该路径，应自行创建软链接并明确其对应版本。
 
    更多用法：
 
@@ -122,8 +122,8 @@ Use `--help` for more details.
 
   - 每个包的编译输出目录：`./ohloha_pkgs/dist.<arch>.*`；
   - Python wheels 编译输出目录：`./ohloha_pkgs/dist.wheels/`；
-  - 所有库的交叉编译源码和中间生成目录：`./ohloha_pkgs/.staging/`；
-  - 部分库的宿主机编译源码和中间生成目录（有些库需要先编译宿主机的原生库，才能借助产物进行交叉编译，例如 Python3、gRPC 等）：`./ohloha_pkgs/.staging.native/`；
+  - 下载缓存、源码快照、构建 workdir、artifact、host 工具、crossenv 等构建状态：`./ohloha_pkgs/.ohloha/`；
+  - 旧版本可能残留 `.staging*` 或 `crossenv_*` 目录；当前构建流程不再把它们作为源码或 crossenv 状态来源。
 
   如果交叉编译过程中发现无法解决的问题，可以通过删除这些目录来尝试一下；
 
@@ -184,4 +184,3 @@ ohla add console_bridge --prefix ./dist
 ```shell
 ohla add console_bridge
 ```
-

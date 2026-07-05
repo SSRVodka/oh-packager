@@ -1,9 +1,13 @@
 package pkgclient
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/SSRVodka/oh-packager/internal/common"
 	"github.com/SSRVodka/oh-packager/pkg/meta"
 )
 
@@ -96,6 +100,48 @@ func TestBuildLogPathSeparatesPackageVersions(t *testing.T) {
 	want := "/repo/.ohloha/logs/aarch64/openssl/3.5.0/build.log"
 	if path != want {
 		t.Fatalf("buildLogPath() = %q, want %q", path, want)
+	}
+}
+
+func TestRealPackageIndexResolvesNumpyMajorVersions(t *testing.T) {
+	repo := filepath.Join("..", "..", "ohloha_pkgs")
+	indexPath := filepath.Join(repo, "PKG_INDEX.json")
+	if _, err := os.Stat(indexPath); err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("stat package index failed: %v", err)
+		}
+		cmd := exec.Command("bash", "./gen-pkg-index.sh")
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("gen-pkg-index.sh failed: %v\n%s", err, out)
+		}
+		t.Cleanup(func() { _ = os.Remove(indexPath) })
+	}
+
+	packages, err := common.ParsePackageIndexFile(indexPath)
+	if err != nil {
+		t.Fatalf("ParsePackageIndexFile failed: %v", err)
+	}
+
+	client := &Client{}
+	tests := []struct {
+		request string
+		want    string
+	}{
+		{request: "python3-opencv", want: "2.3.1"},
+		{request: "opencv", want: "2.3.1"},
+		{request: "onnxruntime", want: "1.26.5"},
+	}
+
+	for _, tt := range tests {
+		selected, err := client.selectPackagesWithDeps(packages, []string{tt.request})
+		if err != nil {
+			t.Fatalf("selectPackagesWithDeps(%q) failed: %v", tt.request, err)
+		}
+		versions := selectedVersions(selected)
+		if versions["python3-numpy"] != tt.want {
+			t.Fatalf("selectPackagesWithDeps(%q) resolved python3-numpy %q, want %q", tt.request, versions["python3-numpy"], tt.want)
+		}
 	}
 }
 
