@@ -352,6 +352,10 @@ func buildDependencyMaps(packages []*meta.PackageInfo) (map[meta.PackageID][]met
 
 func runBuildWorker(ctx context.Context, repo, builderPath, ohosSdk, arch string, pkg *meta.PackageInfo, depsFile, logPath string) buildResult {
 	result := buildResult{id: pkg.ID(), logPath: logPath}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		result.err = fmt.Errorf("failed to create log dir: %w", err)
+		return result
+	}
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		result.err = fmt.Errorf("failed to create log file: %w", err)
@@ -484,7 +488,7 @@ func writeResolvedDepsFile(repo, root string, pkg *meta.PackageInfo, arch string
 }
 
 func buildLogPath(root string, pkg *meta.PackageInfo, arch string) string {
-	return filepath.Join(root, fmt.Sprintf("%s-%s-%s.log", safePathComponent(pkg.Name), safePathComponent(pkg.Version), safePathComponent(arch)))
+	return filepath.Join(root, safePathComponent(arch), safePathComponent(pkg.Name), safePathComponent(pkg.Version), "build.log")
 }
 
 func safePathComponent(value string) string {

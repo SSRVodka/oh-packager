@@ -91,6 +91,14 @@ func TestSelectPackagesReportsMissingPackageOnMultipleLines(t *testing.T) {
 	}
 }
 
+func TestBuildLogPathSeparatesPackageVersions(t *testing.T) {
+	path := buildLogPath("/repo/.ohloha/logs", &meta.PackageInfo{Name: "openssl", Version: "3.5.0"}, "aarch64")
+	want := "/repo/.ohloha/logs/aarch64/openssl/3.5.0/build.log"
+	if path != want {
+		t.Fatalf("buildLogPath() = %q, want %q", path, want)
+	}
+}
+
 func selectedVersions(packages []*meta.PackageInfo) map[string]string {
 	versions := make(map[string]string, len(packages))
 	for _, pkg := range packages {
