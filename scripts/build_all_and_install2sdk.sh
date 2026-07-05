@@ -1,48 +1,17 @@
 #!/bin/bash
-
 set -Eeuo pipefail
 
-cd $(dirname $(readlink -f $0))
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+PROJECT_ROOT=$(dirname "$SCRIPT_DIR")
+SRC_REPO="${PROJECT_ROOT}/ohloha_pkgs"
+JOBS="${OHLOHA_JOBS:-$(nproc 2>/dev/null || echo 1)}"
 
-SRC_REPO=$(pwd)/../ohloha_pkgs
-
-if [ -z "${OHOS_SDK:-}" ]; then
-    echo "ERROR: OHOS_SDK not set. e.g., export OHOS_SDK=/xxx/linux"
-    exit 1
-fi
-
-if [ -z "${OHOS_CPU:-}" ]; then
-    echo "ERROR: OHOS_CPU not set (aarch64|arm|x86_64). e.g., export OHOS_CPU=aarch64"
-    exit 1
-fi
-
-if [ "${OHOS_CPU}" = "aarch64" ]; then
-    OHOS_ARCH="arm64-v8a"
-elif [ "${OHOS_CPU}" = "arm" ]; then
-    OHOS_ARCH="armeabi-v7a"
-elif [ "${OHOS_CPU}" = "x86_64" ]; then
-    OHOS_ARCH="x86_64"
-else
-    echo "ERROR: Unsupported cpu '$OHOS_CPU' (supported 'aarch64', 'arm', 'x86_64')"
-    exit 1
-fi
-
-PKG_MGR=ohla
-PKG_SERVER=ohla-server
-
-$SRC_REPO/gen-versions.sh
-
-$PKG_MGR \
-    config --arch ${OHOS_CPU} --ohos-sdk ${OHOS_SDK} --pkg-src-repo ${SRC_REPO} --server-root http://localhost
-
-$PKG_MGR \
-    xcompile --arch ${OHOS_CPU} \
+"${SCRIPT_DIR}/build_and_install.sh" --jobs "$JOBS" --both --prefix "${SCRIPT_DIR}/out" \
     libz openssl libffi sqlite bzip2 xz libncursesw libreadline libgettext util-linux python3 \
     openblas libaacplus x264 alsa-lib libiconv ffmpeg \
     libgmp libmpfr libmpc binutils patchelf \
     python3-cython python3-build python3-numpy2 \
-    python3-wheel python3-setuptools opencv python3-opencv python3-netifaces \
-    python3-pillow \
+    python3-wheel python3-setuptools opencv python3-opencv python3-netifaces python3-pillow python3-rpds \
     icu libxml2 asio console_bridge nasm attr acl assimp fmt yaml-cpp libpsl curl boost eigen qhull libccd \
     SuiteSparse gflags glog gtest ceres-solver zstd zeromq libexpat libpng g2o geographiclib tinyxml2 \
     oneTBB pcre2 swig YDLidar-SDK llama.cpp rsync lz4 octomap xtl xtensor xsimd nanoflann nlohmann-json \
@@ -50,68 +19,17 @@ $PKG_MGR \
     ogre GraphicsMagick flann pcl bullet3 qt5 \
     grpc glew glut gdb vim openssh-portable \
     libpcap lua pixman cairo cups openjdk
-    
-OHOS_CPU=${OHOS_CPU} OHOS_ARCH=${OHOS_ARCH} $SRC_REPO/pkgs-deploy-all.sh
 
-pkg_files=()
-deploy_dir=$SRC_REPO/deploy
-
-while IFS= read -r -d '' file; do
-    name=$(basename -- "$file" .json)
-    abs_dir=$(dirname -- "$(realpath -- "$file")")
-    pkg_path="${abs_dir}/${name}.pkg"
-    pkg_files+=("$pkg_path")
-done < <(find "$deploy_dir" -maxdepth 1 -name "*.json" -print0)
-
-# backup original SDK
-if [ "${OHOS_SDK:-}" = "/" ] || [ -z "${OHOS_SDK:-}" ]; then
-    echo "Error: Invalid or empty OHOS_SDK path: '${OHOS_SDK}'" >&2
-    exit 1
+if [ -z "${OHOS_CPU:-}" ]; then
+    OHOS_CPU=aarch64
 fi
-if [ ! -d "${OHOS_SDK}" ]; then
-    echo "Error: SDK path does not exist: ${OHOS_SDK}" >&2
-    exit 1
-fi
-sdk_bak="${OHOS_SDK}-backup-$(date +"%Y%m%d")"
-if [ -e "${sdk_bak}" ]; then
-    echo "Error: Backup target already exists: ${sdk_bak}" >&2
-    exit 1
-fi
-restore_on_failure() {
-    local err_code=$?
-    echo "Error occurred (code: ${err_code}). Attempting recovery..." >&2
-    if [ ! -e "${OHOS_SDK}" ] && [ -d "${sdk_bak}" ]; then
-        echo "Restoring SDK from backup: ${sdk_bak} -> ${OHOS_SDK}" >&2
-        mv "${sdk_bak}" "${OHOS_SDK}"
-    fi
-    if [ -e "${OHOS_SDK}.rubbish" ]; then
-        echo "Cleaning up unexpected .rubbish directory" >&2
-        rm -rf "${OHOS_SDK}.rubbish"
-    fi
-    exit $err_code
-}
-trap restore_on_failure ERR
-echo "Backing up SDK to ${sdk_bak}..."
-cp -r "${OHOS_SDK}" "${sdk_bak}"
 
-$PKG_MGR add --no-resolve -y "${pkg_files[@]}"
-mv "${OHOS_SDK}" "${OHOS_SDK}.rubbish"
-mv "${sdk_bak}" "${OHOS_SDK}"
-rm -rf "${OHOS_SDK}.rubbish"
+pydeps_url="https://github.com/SSRVodka/oh-edu-pkgs/releases/download/v0.0.2/pydeps-${OHOS_CPU}-20251229.tar.gz"
+pydeps_archive="${SCRIPT_DIR}/pydeps-${OHOS_CPU}.tar.gz"
 
-# package the sdk
-pushd ${OHOS_SDK}/..
-tar -zcpvf ohos-sdk-18-linux-${OHOS_CPU}-$(date +"%Y%m%d").tar.gz $(basename ${OHOS_SDK})
-popd
-mv ${OHOS_SDK}/../ohos-sdk-18-linux-${OHOS_CPU}-*.tar.gz ${SRC_REPO}/..
+echo ">>> Fetching prebuilt Python dependencies: ${pydeps_url}"
+wget -O "$pydeps_archive" "$pydeps_url"
+tar -C "$SCRIPT_DIR" -zxpvf "$pydeps_archive"
+tar -C "$SCRIPT_DIR" -zcpvf "${PROJECT_ROOT}/ohos-18-sysdeps-${OHOS_CPU}-$(date +"%Y%m%d%H%M%S").tar.gz" out/
 
-# use --prefix to install to specific location
-mkdir -p $(pwd)/out
-$PKG_MGR add --no-resolve -y --prefix $(pwd)/out "${pkg_files[@]}"
-
-# package sysdeps
-# add prebuilt pydeps
-wget -O pydeps.tar.gz https://github.com/SSRVodka/oh-edu-pkgs/releases/download/v0.0.2/pydeps-${OHOS_CPU}-20251229.tar.gz
-tar -zxpvf pydeps.tar.gz
-tar -zcpvf ohos-18-sysdeps-${OHOS_CPU}-$(date +"%Y%m%d").tar.gz out/
-mv ohos-18-sysdeps-${OHOS_CPU}-*.tar.gz ${SRC_REPO}/..
+echo ">>> Build/install-all flow completed. Source repo: ${SRC_REPO}"
